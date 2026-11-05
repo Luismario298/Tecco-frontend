@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "388641366925",
+    "project_id": "notyproxy",
+    "storage_bucket": "notyproxy.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:388641366925:android:437fea0dc505ecdded93c4",
+        "android_client_info": {
+          "package_name": "com.notiproxy.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCx53NSPFD0-rWY_82oISSnm-BA5KVdzqQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
