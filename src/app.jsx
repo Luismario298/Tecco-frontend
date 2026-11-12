@@ -8,6 +8,8 @@ import HomeSection from './HomeSection';
 import WorkerProfile from './WorkerProfile';
 import MapScreen, { FullMapScreen } from './MapScreen';
 import WorkerDirectory from './WorkerDirectory';
+import WorkerRequestsPanel from './WorkerRequestsPanel';
+import RealtimeChat from './RealtimeChat';
 import { CloudinaryService } from './cloudinaryService';
 
 export default function App() {
@@ -38,16 +40,11 @@ export default function App() {
   const [cargandoDatos, setCargandoDatos] = useState(false);
   const [perfilSeleccionado, setPerfilSeleccionado] = useState(null);
 
-  // Galería y Chat
+  // Galería y Chat en Tiempo Real
   const [galeriaPortafolio, setGaleriaPortafolio] = useState([]);
   const [cargandoGaleria, setCargandoGaleria] = useState(false);
   const [chatActivo, setChatActivo] = useState(false);
-  const [mensajesChat, setMensajesChat] = useState([
-    { remitente: 'sistema', texto: 'Canal de mensajería seguro para negociación de servicio.' }
-  ]);
-  const [nuevoMensaje, setNuevoMensaje] = useState("");
-  const [fotoFallaUrl, setFotoFallaUrl] = useState("");
-  const [propuestaCotizacion, setPropuestaCotizacion] = useState("500");
+  const [chatSalaInfo, setChatSalaInfo] = useState(null);
 
   // Solicitud de Servicio
   const [detallesFallaCliente, setDetallesFallaCliente] = useState("");
@@ -126,14 +123,14 @@ export default function App() {
         cliente_email: email || route.params.email || 'cliente@tecco.com',
         detalles_falla: detallesFallaCliente,
         zona: zonaSolicitud,
-        estado: 'Completado',
+        estado: 'Pendiente',
         fecha_creacion: new Date().toISOString()
       });
 
-      alert('¡Servicio registrado y completado con éxito en Firebase!');
+      alert('¡Solicitud de servicio enviada con éxito al especialista!');
       setDetallesFallaCliente("");
       await cargarDatosFirestore();
-      setPantalla('DetallePerfil');
+      setPantalla('Home');
     } catch (error) {
       console.error("Error al enviar solicitud:", error);
     } finally {
@@ -141,6 +138,7 @@ export default function App() {
     }
   };
 
+  // VALIDACIÓN ESTRICTA DE INICIO DE SESIÓN Y REGISTRO CONTRA FIREBASE
   const handleSubmit = async () => {
     if (!email || !password || (!isLogin && (!nombre || !confirmPassword))) {
       alert('Campos incompletos: Por favor llena todos los campos obligatorios.');
@@ -152,13 +150,42 @@ export default function App() {
     }
 
     try {
+      const rolActual = route.params.role || 'cliente';
+      const coleccionObjetivo = rolActual === 'trabajador' ? 'trabajadores' : 'clientes';
+
       if (isLogin) {
-        alert(`¡Bienvenido de nuevo! Has iniciado sesión como ${route.params.role}.`);
+        // Buscar en la base de datos si el correo y la contraseña coinciden exactamente
+        const q = query(
+          collection(db, coleccionObjetivo), 
+          where('email', '==', email.trim().toLowerCase()),
+          where('password', '==', password)
+        );
+        const querySnapshot = await getDocs(q);
+
+        if (querySnapshot.empty) {
+          alert('❌ Acceso denegado: El correo o la contraseña son incorrectos, o la cuenta no existe en la base de datos.');
+          return;
+        }
+
+        // Si encuentra el registro, permite el acceso
+        const userData = querySnapshot.docs[0].data();
+        setNombre(userData.nombre || '');
+        alert(`¡Bienvenido de nuevo, ${userData.nombre || 'Usuario'}!`);
         await cargarDatosFirestore();
         setPantalla('Home');
+
       } else {
+        // Verificar si el correo ya está registrado para evitar duplicados
+        const qCheck = query(collection(db, coleccionObjetivo), where('email', '==', email.trim().toLowerCase()));
+        const checkSnapshot = await getDocs(qCheck);
+
+        if (!checkSnapshot.empty) {
+          alert('⚠️ Este correo ya está registrado en la base de datos. Por favor inicia sesión.');
+          return;
+        }
+
         let ineUrlSubida = "";
-        if (route.params.role === 'trabajador') {
+        if (rolActual === 'trabajador') {
           if (archivoIne) {
             setSubiendoIne(true);
             ineUrlSubida = await CloudinaryService.subirImagen(archivoIne);
@@ -168,21 +195,24 @@ export default function App() {
               return;
             }
           }
-          navigation.navigate('RegisterTechnical', { nombre, email, ineUrl: ineUrlSubida });
+          navigation.navigate('RegisterTechnical', { nombre, email, password, ineUrl: ineUrlSubida });
         } else {
+          // Guardar cliente en Firebase con su contraseña
           await addDoc(collection(db, 'clientes'), {
             nombre: nombre,
-            email: email,
+            email: email.trim().toLowerCase(),
+            password: password,
             rol: 'cliente',
             fecha_registro: serverTimestamp()
           });
-          alert('¡Cuenta de cliente creada exitosamente!');
+          alert('¡Cuenta de cliente creada y guardada en Firebase exitosamente!');
           await cargarDatosFirestore();
           setPantalla('Home');
         }
       }
     } catch (error) {
-      console.error("Error en autenticación:", error);
+      console.error("Error en autenticación con Firebase:", error);
+      alert('Ocurrió un error al conectar con la base de datos.');
       setSubiendoIne(false);
     }
   };
@@ -194,7 +224,8 @@ export default function App() {
       
       await addDoc(collection(db, 'trabajadores'), {
         nombre: route.params.nombre || nombre,
-        email: route.params.email || email,
+        email: (route.params.email || email).trim().toLowerCase(),
+        password: route.params.password || password,
         ine_url: route.params.ineUrl || "",
         oficio: oficio,
         anosExperiencia: anosExperiencia,
@@ -209,29 +240,12 @@ export default function App() {
         createdAt: new Date().toISOString()
       });
 
-      alert('¡Perfil profesional guardado exitosamente!');
+      alert('¡Perfil profesional y credenciales guardados exitosamente en Firebase!');
       await cargarDatosFirestore();
       setPantalla('Home');
     } catch (error) {
       console.error("Error al registrar trabajador:", error);
     }
-  };
-
-  const enviarMensajeChat = async (e) => {
-    e.preventDefault();
-    if (!nuevoMensaje.trim() && !fotoFallaUrl) return;
-
-    const listaActualizada = [...mensajesChat, { remitente: 'usuario', texto: nuevoMensaje, foto: fotoFallaUrl }];
-    setMensajesChat(listaActualizada);
-    setNuevoMensaje("");
-    setFotoFallaUrl("");
-
-    setTimeout(() => {
-      setMensajesChat(prev => [
-        ...prev, 
-        { remitente: 'profesional', texto: `Cotización ajustada a $${propuestaCotizacion} MXN aceptada.` }
-      ]);
-    }, 1200);
   };
 
   // Renderizado condicional de pantallas
@@ -243,7 +257,26 @@ export default function App() {
         cargandoDatos={cargandoDatos} 
         onNavigate={(screen, params) => navigation.navigate(screen, params)}
         onSelectWorker={(worker) => abrirPerfilDetallado(worker)}
-        onOpenChat={(worker) => { setPerfilSeleccionado(worker); setChatActivo(true); }}
+        onOpenChat={(worker) => { 
+          setPerfilSeleccionado(worker); 
+          setChatSalaInfo(null);
+          setChatActivo(true); 
+        }}
+      />
+    );
+  }
+
+  if (pantalla === 'WorkerRequests') {
+    return (
+      <WorkerRequestsPanel 
+        workerEmail={email || route.params.email}
+        workerName={nombre || route.params.nombre}
+        onBack={() => setPantalla('Home')}
+        onOpenChat={(infoSala) => {
+          setChatSalaInfo(infoSala);
+          setPerfilSeleccionado(null);
+          setChatActivo(true);
+        }}
       />
     );
   }
@@ -311,7 +344,7 @@ export default function App() {
               <label style={{ fontSize: '12px', color: '#4A5568', fontWeight: 'bold', marginBottom: '6px', display: 'block' }}>¿Qué necesitas que repare o instale?</label>
               <textarea
                 rows="4"
-                placeholder=" "
+                placeholder="Ej. Fuga en tubería principal..."
                 value={detallesFallaCliente}
                 onChange={(e) => setDetallesFallaCliente(e.target.value)}
                 required
@@ -326,7 +359,6 @@ export default function App() {
                 onChange={(e) => setZonaSolicitud(e.target.value)}
                 style={{ width: '100%', padding: '12px', borderRadius: '12px', border: '1px solid #E2E8F0', backgroundColor: '#F8F9FA', fontSize: '13px' }}
               >
-                <option value=" "></option>
                 <option value="Villas del Sol">Villas del Sol</option>
                 <option value="Centro">Centro</option>
                 <option value="Ejido">Ejido</option>
@@ -340,7 +372,7 @@ export default function App() {
               disabled={enviandoSolicitud}
               style={{ backgroundColor: '#00A887', color: '#FFFFFF', border: 'none', width: '100%', padding: '14px', borderRadius: '12px', fontSize: '15px', fontWeight: 'bold', cursor: 'pointer', marginTop: '6px', boxShadow: '0 4px 12px rgba(0, 168, 135, 0.25)' }}
             >
-              {enviandoSolicitud ? 'Registrando en Firebase...' : '🚀 Finalizar y Completar Servicio'}
+              {enviandoSolicitud ? 'Enviando a Firebase...' : '🚀 Enviar Solicitud'}
             </button>
           </form>
         </div>
@@ -382,7 +414,7 @@ export default function App() {
             {route.params.role === 'cliente' && (
               <button onClick={() => setPantalla('SolicitarTrabajo')} style={{ flex: 1, backgroundColor: '#00A887', color: '#FFFFFF', border: 'none', padding: '14px', borderRadius: '12px', fontSize: '14px', fontWeight: 'bold', cursor: 'pointer', boxShadow: '0 4px 10px rgba(0, 168, 135, 0.2)' }}>🛠️ Solicitar Servicio</button>
             )}
-            <button onClick={() => setChatActivo(true)} style={{ flex: 1, backgroundColor: '#1A202C', color: '#FFFFFF', border: 'none', padding: '14px', borderRadius: '12px', fontSize: '14px', fontWeight: 'bold', cursor: 'pointer' }}>💬 Chat y Negociar</button>
+            <button onClick={() => { setChatSalaInfo(null); setChatActivo(true); }} style={{ flex: 1, backgroundColor: '#1A202C', color: '#FFFFFF', border: 'none', padding: '14px', borderRadius: '12px', fontSize: '14px', fontWeight: 'bold', cursor: 'pointer' }}>💬 Chat y Negociar</button>
           </div>
         </div>
 
@@ -428,7 +460,7 @@ export default function App() {
           <div style={{ width: '140px', height: '140px', borderRadius: '28px', backgroundColor: '#00A887', margin: '0 auto 24px auto', display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '15px', boxShadow: '0 10px 25px rgba(0, 168, 135, 0.2)' }}>
             <img src={logoTecco} alt="TECCO" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
           </div>
-          <h2 style={{ fontSize: '24px', color: '#1E2A38', margin: '0 0 10px 0', fontWeight: '700' }}>BIENVENIDO A TECCO</h2>
+          <h2 style={{ fontSize: '24px', color: '#1E2A38', margin: '0 0 10px 0', fontWeight: '700' }}>Servicios a Domicilio</h2>
           <p style={{ fontSize: '14px', color: '#718096', lineHeight: '1.5' }}>Tu plataforma de especialistas locales en Playa del Carmen al instante.</p>
         </div>
         <button onClick={() => setPantalla('RoleSelection')} style={{ backgroundColor: '#00A887', color: '#FFFFFF', border: 'none', width: '100%', padding: '16px', borderRadius: '16px', fontSize: '16px', fontWeight: 'bold', cursor: 'pointer', boxShadow: '0 4px 12px rgba(0, 168, 135, 0.3)' }}>Comenzar &gt;</button>
@@ -457,9 +489,19 @@ export default function App() {
     );
   }
 
+  // Pantalla de Autenticación con Botón de Regresar
   if (pantalla === 'Auth') {
     return (
       <div style={{ backgroundColor: '#FFFFFF', minHeight: '100vh', padding: '30px 20px', maxWidth: '450px', margin: '0 auto', boxSizing: 'border-box' }}>
+        
+        {/* Botón de Regresar a selección de rol */}
+        <button 
+          onClick={() => setPantalla('RoleSelection')}
+          style={{ backgroundColor: '#F1F5F9', border: 'none', color: '#334155', padding: '8px 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 'bold', cursor: 'pointer', marginBottom: '20px' }}
+        >
+          ← Regresar
+        </button>
+
         <div style={{ textAlign: 'center', marginBottom: '24px' }}>
           <h2 style={{ fontSize: '20px', color: '#1E2A38', fontWeight: '700' }}>{isLogin ? 'Iniciar Sesión' : 'Crear Cuenta'}</h2>
           <p style={{ fontSize: '12px', color: '#00A887', fontWeight: 'bold' }}>{route.params.role === 'trabajador' ? '🛠️ Colaborador' : '🏠 Cliente'}</p>
@@ -528,5 +570,21 @@ export default function App() {
     );
   }
 
-  return null;
+  return (
+    <>
+      {chatActivo && (
+        <RealtimeChat 
+          salaId={chatSalaInfo?.salaId || perfilSeleccionado?.id}
+          currentUserRole={route.params.role}
+          currentUserName={nombre || route.params.nombre}
+          contraparteNombre={chatSalaInfo?.nombreContraparte || perfilSeleccionado?.nombre}
+          onClose={() => {
+            setChatActivo(false);
+            setChatSalaInfo(null);
+            setPerfilSeleccionado(null);
+          }}
+        />
+      )}
+    </>
+  );
 }
