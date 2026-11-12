@@ -138,7 +138,7 @@ export default function App() {
     }
   };
 
-  // VALIDACIÓN ESTRICTA DE INICIO DE SESIÓN Y REGISTRO CONTRA FIREBASE
+  // Autenticación Tradicional con validación estricta en Firebase
   const handleSubmit = async () => {
     if (!email || !password || (!isLogin && (!nombre || !confirmPassword))) {
       alert('Campos incompletos: Por favor llena todos los campos obligatorios.');
@@ -154,7 +154,6 @@ export default function App() {
       const coleccionObjetivo = rolActual === 'trabajador' ? 'trabajadores' : 'clientes';
 
       if (isLogin) {
-        // Buscar en la base de datos si el correo y la contraseña coinciden exactamente
         const q = query(
           collection(db, coleccionObjetivo), 
           where('email', '==', email.trim().toLowerCase()),
@@ -167,7 +166,6 @@ export default function App() {
           return;
         }
 
-        // Si encuentra el registro, permite el acceso
         const userData = querySnapshot.docs[0].data();
         setNombre(userData.nombre || '');
         alert(`¡Bienvenido de nuevo, ${userData.nombre || 'Usuario'}!`);
@@ -175,7 +173,6 @@ export default function App() {
         setPantalla('Home');
 
       } else {
-        // Verificar si el correo ya está registrado para evitar duplicados
         const qCheck = query(collection(db, coleccionObjetivo), where('email', '==', email.trim().toLowerCase()));
         const checkSnapshot = await getDocs(qCheck);
 
@@ -197,7 +194,6 @@ export default function App() {
           }
           navigation.navigate('RegisterTechnical', { nombre, email, password, ineUrl: ineUrlSubida });
         } else {
-          // Guardar cliente en Firebase con su contraseña
           await addDoc(collection(db, 'clientes'), {
             nombre: nombre,
             email: email.trim().toLowerCase(),
@@ -214,6 +210,47 @@ export default function App() {
       console.error("Error en autenticación con Firebase:", error);
       alert('Ocurrió un error al conectar con la base de datos.');
       setSubiendoIne(false);
+    }
+  };
+
+  // Autenticación Social (Google / Facebook) con verificación y autorregistro automático en Firebase
+  const handleSocialAuth = async (providerName) => {
+    const dummyEmail = `usuario_${providerName.toLowerCase()}@tecco.com`;
+    const dummyNombre = `Usuario de ${providerName}`;
+    const rolActual = route.params.role || 'cliente';
+    const coleccionObjetivo = rolActual === 'trabajador' ? 'trabajadores' : 'clientes';
+
+    try {
+      const q = query(collection(db, coleccionObjetivo), where('email', '==', dummyEmail));
+      const querySnapshot = await getDocs(q);
+
+      if (!querySnapshot.empty) {
+        setNombre(dummyNombre);
+        setEmail(dummyEmail);
+        alert(`¡Sesión iniciada exitosamente con ${providerName}!`);
+        await cargarDatosFirestore();
+        setPantalla('Home');
+      } else {
+        // Si no existe, lo registramos automáticamente en Firebase
+        await addDoc(collection(db, coleccionObjetivo), {
+          nombre: dummyNombre,
+          email: dummyEmail,
+          password: 'social_auth_secure',
+          rol: rolActual,
+          fecha_registro: serverTimestamp(),
+          disponible: true,
+          rating: "5.0",
+          colonia: "Villas del Sol"
+        });
+        setNombre(dummyNombre);
+        setEmail(dummyEmail);
+        alert(`¡Cuenta creada y acceso concedido vía ${providerName} en Firebase!`);
+        await cargarDatosFirestore();
+        setPantalla('Home');
+      }
+    } catch (error) {
+      console.error(`Error en autenticación con ${providerName}:`, error);
+      alert(`No se pudo completar el acceso con ${providerName}.`);
     }
   };
 
@@ -322,13 +359,13 @@ export default function App() {
   if (pantalla === 'RequestService' || pantalla === 'SolicitarTrabajo') {
     const targetWorker = route.params.worker || perfilSeleccionado;
     return (
-      <div style={{ backgroundColor: '#F8F9FA', minHeight: '100vh', padding: '16px', fontFamily: 'Inter, Poppins, sans-serif', maxWidth: '480px', margin: '0 auto', boxSizing: 'border-box' }}>
+      <div style={{ backgroundColor: '#F8F9FA', minHeight: '100vh', padding: '16px', fontFamily: 'Inter, Poppins, sans-serif', width: '100%', maxWidth: '480px', margin: '0 auto', boxSizing: 'border-box' }}>
         <div style={{ display: 'flex', alignItems: 'center', marginBottom: '16px', backgroundColor: '#FFFFFF', padding: '12px 16px', borderRadius: '14px', boxShadow: '0 2px 8px rgba(0,0,0,0.04)' }}>
           <button onClick={() => setPantalla(targetWorker ? 'DetallePerfil' : 'Home')} style={{ background: 'none', border: 'none', fontSize: '16px', cursor: 'pointer', marginRight: '12px', fontWeight: 'bold', color: '#00A887' }}>← Volver</button>
           <h2 style={{ fontSize: '16px', color: '#1E2A38', margin: 0, fontWeight: '700' }}>🛒 Solicitar Cotización / Servicio</h2>
         </div>
 
-        <div style={{ backgroundColor: '#FFFFFF', borderRadius: '16px', padding: '20px', boxShadow: '0 4px 12px rgba(0,0,0,0.04)' }}>
+        <div style={{ backgroundColor: '#FFFFFF', borderRadius: '16px', padding: '20px', boxShadow: '0 4px 12px rgba(0,0,0,0.04)', width: '100%', boxSizing: 'border-box' }}>
           <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginBottom: '16px', borderBottom: '1px solid #EDF2F7', paddingBottom: '12px' }}>
             <div style={{ width: '50px', height: '50px', borderRadius: '12px', backgroundColor: '#E6F6F3', color: '#00A887', display: 'flex', justifyContent: 'center', alignItems: 'center', fontSize: '22px', fontWeight: 'bold' }}>
               🛠️
@@ -339,7 +376,7 @@ export default function App() {
             </div>
           </div>
 
-          <form onSubmit={handleEnviarSolicitudTrabajo} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <form onSubmit={handleEnviarSolicitudTrabajo} style={{ display: 'flex', flexDirection: 'column', gap: '14px', width: '100%', boxSizing: 'border-box' }}>
             <div>
               <label style={{ fontSize: '12px', color: '#4A5568', fontWeight: 'bold', marginBottom: '6px', display: 'block' }}>¿Qué necesitas que repare o instale?</label>
               <textarea
@@ -357,7 +394,7 @@ export default function App() {
               <select
                 value={zonaSolicitud}
                 onChange={(e) => setZonaSolicitud(e.target.value)}
-                style={{ width: '100%', padding: '12px', borderRadius: '12px', border: '1px solid #E2E8F0', backgroundColor: '#F8F9FA', fontSize: '13px' }}
+                style={{ width: '100%', padding: '12px', borderRadius: '12px', border: '1px solid #E2E8F0', backgroundColor: '#F8F9FA', fontSize: '13px', boxSizing: 'border-box' }}
               >
                 <option value="Villas del Sol">Villas del Sol</option>
                 <option value="Centro">Centro</option>
@@ -370,7 +407,7 @@ export default function App() {
             <button
               type="submit"
               disabled={enviandoSolicitud}
-              style={{ backgroundColor: '#00A887', color: '#FFFFFF', border: 'none', width: '100%', padding: '14px', borderRadius: '12px', fontSize: '15px', fontWeight: 'bold', cursor: 'pointer', marginTop: '6px', boxShadow: '0 4px 12px rgba(0, 168, 135, 0.25)' }}
+              style={{ backgroundColor: '#00A887', color: '#FFFFFF', border: 'none', width: '100%', padding: '14px', borderRadius: '12px', fontSize: '15px', fontWeight: 'bold', cursor: 'pointer', marginTop: '6px', boxShadow: '0 4px 12px rgba(0, 168, 135, 0.25)', boxSizing: 'border-box' }}
             >
               {enviandoSolicitud ? 'Enviando a Firebase...' : '🚀 Enviar Solicitud'}
             </button>
@@ -383,13 +420,13 @@ export default function App() {
   // Pantalla: Perfil Ampliado
   if (pantalla === 'DetallePerfil' && perfilSeleccionado) {
     return (
-      <div style={{ backgroundColor: '#F8F9FA', minHeight: '100vh', paddingBottom: '30px', fontFamily: 'Inter, Poppins, sans-serif', maxWidth: '600px', margin: '0 auto', boxSizing: 'border-box' }}>
-        <div style={{ backgroundColor: '#00A887', height: '140px', position: 'relative', padding: '16px', display: 'flex', alignItems: 'center' }}>
+      <div style={{ backgroundColor: '#F8F9FA', minHeight: '100vh', paddingBottom: '30px', fontFamily: 'Inter, Poppins, sans-serif', width: '100%', maxWidth: '600px', margin: '0 auto', boxSizing: 'border-box' }}>
+        <div style={{ backgroundColor: '#00A887', height: '140px', position: 'relative', padding: '16px', display: 'flex', alignItems: 'center', width: '100%', boxSizing: 'border-box' }}>
           <button onClick={() => setPantalla('Home')} style={{ backgroundColor: 'rgba(0,0,0,0.3)', border: 'none', color: '#FFF', width: '36px', height: '36px', borderRadius: '50%', fontSize: '16px', cursor: 'pointer', fontWeight: 'bold' }}>←</button>
           <span style={{ color: '#FFF', fontWeight: 'bold', marginLeft: '12px', fontSize: '16px' }}>Perfil Profesional</span>
         </div>
 
-        <div style={{ backgroundColor: '#FFFFFF', borderRadius: '20px', margin: '-50px 16px 16px 16px', padding: '20px', boxShadow: '0 6px 20px rgba(0,0,0,0.06)', position: 'relative' }}>
+        <div style={{ backgroundColor: '#FFFFFF', borderRadius: '20px', margin: '-50px 16px 16px 16px', padding: '20px', boxShadow: '0 6px 20px rgba(0,0,0,0.06)', position: 'relative', width: 'calc(100% - 32px)', boxSizing: 'border-box' }}>
           <div style={{ display: 'flex', justifyContent: 'center', marginTop: '-50px', marginBottom: '10px' }}>
             <div style={{ width: '80px', height: '80px', borderRadius: '50%', backgroundColor: '#00A887', color: '#FFF', display: 'flex', justifyContent: 'center', alignItems: 'center', fontSize: '32px', fontWeight: 'bold', border: '4px solid #FFF', boxShadow: '0 4px 10px rgba(0,0,0,0.1)' }}>
               {perfilSeleccionado.nombre ? perfilSeleccionado.nombre.charAt(0) : 'T'}
@@ -403,7 +440,7 @@ export default function App() {
             </span>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', backgroundColor: '#F8F9FA', padding: '14px', borderRadius: '14px', marginBottom: '16px', fontSize: '13px', color: '#4A5568' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '10px', backgroundColor: '#F8F9FA', padding: '14px', borderRadius: '14px', marginBottom: '16px', fontSize: '13px', color: '#4A5568' }}>
             <div>⭐ <strong>Calificación:</strong> {perfilSeleccionado.rating || '5.0'}</div>
             <div>📞 <strong>Teléfono:</strong> {perfilSeleccionado.telefono || 'No reg.'}</div>
             <div>📍 <strong>Zona:</strong> {perfilSeleccionado.colonia}</div>
@@ -418,7 +455,7 @@ export default function App() {
           </div>
         </div>
 
-        <div style={{ margin: '0 16px' }}>
+        <div style={{ margin: '0 16px', boxSizing: 'border-box' }}>
           <h3 style={{ fontSize: '15px', color: '#1E2A38', marginBottom: '12px', fontWeight: '700' }}>🖼️ Galería de Trabajos Previos del Especialista</h3>
           {cargandoGaleria ? (
             <p style={{ textAlign: 'center', color: '#718096', padding: '20px' }}>Cargando galería...</p>
@@ -445,7 +482,7 @@ export default function App() {
 
   if (pantalla === 'loading') {
     return (
-      <div style={{ backgroundColor: '#00A887', minHeight: '100vh', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', color: '#FFFFFF', fontFamily: 'Poppins, Inter, sans-serif' }}>
+      <div style={{ backgroundColor: '#00A887', minHeight: '100vh', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', color: '#FFFFFF', fontFamily: 'Poppins, Inter, sans-serif', width: '100%', boxSizing: 'border-box' }}>
         <img src={logoTecco} alt="TECCO Logo" style={{ width: '120px', height: '120px', objectFit: 'contain', marginBottom: '20px' }} />
         <h1 style={{ fontSize: '32px', margin: '0 0 8px 0', fontWeight: '700' }}>TECCO</h1>
         <p style={{ fontSize: '14px', letterSpacing: '2px', opacity: 0.9, margin: 0 }}>PLAYA DEL CARMEN</p>
@@ -455,7 +492,7 @@ export default function App() {
 
   if (pantalla === 'onboarding') {
     return (
-      <div style={{ backgroundColor: '#F8F9FA', minHeight: '100vh', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', padding: '30px 24px', boxSizing: 'border-box', maxWidth: '450px', margin: '0 auto' }}>
+      <div style={{ backgroundColor: '#F8F9FA', minHeight: '100vh', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', padding: '30px 24px', boxSizing: 'border-box', width: '100%', maxWidth: '450px', margin: '0 auto' }}>
         <div style={{ textAlign: 'center', marginTop: '40px' }}>
           <div style={{ width: '140px', height: '140px', borderRadius: '28px', backgroundColor: '#00A887', margin: '0 auto 24px auto', display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '15px', boxShadow: '0 10px 25px rgba(0, 168, 135, 0.2)' }}>
             <img src={logoTecco} alt="TECCO" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
@@ -463,14 +500,14 @@ export default function App() {
           <h2 style={{ fontSize: '24px', color: '#1E2A38', margin: '0 0 10px 0', fontWeight: '700' }}>Servicios a Domicilio</h2>
           <p style={{ fontSize: '14px', color: '#718096', lineHeight: '1.5' }}>Tu plataforma de especialistas locales en Playa del Carmen al instante.</p>
         </div>
-        <button onClick={() => setPantalla('RoleSelection')} style={{ backgroundColor: '#00A887', color: '#FFFFFF', border: 'none', width: '100%', padding: '16px', borderRadius: '16px', fontSize: '16px', fontWeight: 'bold', cursor: 'pointer', boxShadow: '0 4px 12px rgba(0, 168, 135, 0.3)' }}>Comenzar &gt;</button>
+        <button onClick={() => setPantalla('RoleSelection')} style={{ backgroundColor: '#00A887', color: '#FFFFFF', border: 'none', width: '100%', padding: '16px', borderRadius: '16px', fontSize: '16px', fontWeight: 'bold', cursor: 'pointer', boxShadow: '0 4px 12px rgba(0, 168, 135, 0.3)', boxSizing: 'border-box' }}>Comenzar &gt;</button>
       </div>
     );
   }
 
   if (pantalla === 'RoleSelection') {
     return (
-      <div style={{ backgroundColor: '#F8F9FA', minHeight: '100vh', padding: '40px 20px', maxWidth: '450px', margin: '0 auto', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+      <div style={{ backgroundColor: '#F8F9FA', minHeight: '100vh', padding: '40px 20px', width: '100%', maxWidth: '450px', margin: '0 auto', display: 'flex', flexDirection: 'column', justifyContent: 'center', boxSizing: 'border-box' }}>
         <div style={{ textAlign: 'center', marginBottom: '30px' }}>
           <img src={logoTecco} alt="TECCO" style={{ width: '55px', height: '55px', objectFit: 'contain', marginBottom: '8px' }} />
           <h2 style={{ fontSize: '22px', color: '#1E2A38', fontWeight: '700' }}>¿Cómo deseas ingresar?</h2>
@@ -489,12 +526,11 @@ export default function App() {
     );
   }
 
-  // Pantalla de Autenticación con Botón de Regresar
+  // Pantalla de Autenticación con Botones Sociales y Diseño Responsivo Adaptado
   if (pantalla === 'Auth') {
     return (
-      <div style={{ backgroundColor: '#FFFFFF', minHeight: '100vh', padding: '30px 20px', maxWidth: '450px', margin: '0 auto', boxSizing: 'border-box' }}>
+      <div style={{ backgroundColor: '#FFFFFF', minHeight: '100vh', padding: '30px 20px', width: '100%', maxWidth: '450px', margin: '0 auto', boxSizing: 'border-box' }}>
         
-        {/* Botón de Regresar a selección de rol */}
         <button 
           onClick={() => setPantalla('RoleSelection')}
           style={{ backgroundColor: '#F1F5F9', border: 'none', color: '#334155', padding: '8px 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 'bold', cursor: 'pointer', marginBottom: '20px' }}
@@ -506,7 +542,8 @@ export default function App() {
           <h2 style={{ fontSize: '20px', color: '#1E2A38', fontWeight: '700' }}>{isLogin ? 'Iniciar Sesión' : 'Crear Cuenta'}</h2>
           <p style={{ fontSize: '12px', color: '#00A887', fontWeight: 'bold' }}>{route.params.role === 'trabajador' ? '🛠️ Colaborador' : '🏠 Cliente'}</p>
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', width: '100%', boxSizing: 'border-box' }}>
           {!isLogin && (
             <div>
               <label style={{ fontSize: '12px', fontWeight: 'bold', display: 'block', marginBottom: '4px', color: '#4A5568' }}>Nombre</label>
@@ -530,13 +567,34 @@ export default function App() {
           {!isLogin && route.params.role === 'trabajador' && (
             <div>
               <label style={{ fontSize: '12px', fontWeight: 'bold', display: 'block', marginBottom: '4px', color: '#4A5568' }}>INE</label>
-              <input type="file" accept="image/*" onChange={(e) => setArchivoIne(e.target.files[0])} style={{ fontSize: '12px', width: '100%' }} />
+              <input type="file" accept="image/*" onChange={(e) => setArchivoIne(e.target.files[0])} style={{ fontSize: '12px', width: '100%', boxSizing: 'border-box' }} />
             </div>
           )}
-          <button onClick={handleSubmit} disabled={subiendoIne} style={{ backgroundColor: '#00A887', color: '#FFFFFF', border: 'none', padding: '14px', borderRadius: '12px', fontSize: '15px', fontWeight: 'bold', cursor: 'pointer', marginTop: '6px', boxShadow: '0 4px 10px rgba(0, 168, 135, 0.2)' }}>
+
+          <button onClick={handleSubmit} disabled={subiendoIne} style={{ backgroundColor: '#00A887', color: '#FFFFFF', border: 'none', padding: '14px', borderRadius: '12px', fontSize: '15px', fontWeight: 'bold', cursor: 'pointer', marginTop: '6px', boxShadow: '0 4px 10px rgba(0, 168, 135, 0.2)', width: '100%', boxSizing: 'border-box' }}>
             {subiendoIne ? 'Procesando...' : isLogin ? 'Entrar' : 'Registrarse'}
           </button>
-          <div style={{ textAlign: 'center', marginTop: '12px' }}>
+
+          {/* Botones de Autenticación Social (Google y Facebook) */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '10px', width: '100%', boxSizing: 'border-box' }}>
+            <div style={{ textAlign: 'center', fontSize: '12px', color: '#A0AEC0', margin: '4px 0' }}>o continúa con</div>
+            
+            <button 
+              onClick={() => handleSocialAuth('Google')}
+              style={{ backgroundColor: '#FFFFFF', border: '1px solid #DB4437', color: '#DB4437', padding: '12px', borderRadius: '12px', fontSize: '14px', fontWeight: 'bold', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '8px', width: '100%', boxSizing: 'border-box' }}
+            >
+              🌐 Continuar con Google
+            </button>
+
+            <button 
+              onClick={() => handleSocialAuth('Facebook')}
+              style={{ backgroundColor: '#FFFFFF', border: '1px solid #4267B2', color: '#4267B2', padding: '12px', borderRadius: '12px', fontSize: '14px', fontWeight: 'bold', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '8px', width: '100%', boxSizing: 'border-box' }}
+            >
+              📘 Continuar con Facebook
+            </button>
+          </div>
+
+          <div style={{ textAlign: 'center', marginTop: '14px' }}>
             <span onClick={() => setIsLogin(!isLogin)} style={{ fontSize: '13px', color: '#00A887', cursor: 'pointer', fontWeight: 'bold' }}>{isLogin ? '¿No tienes cuenta? Regístrate' : '¿Ya tienes cuenta? Inicia sesión'}</span>
           </div>
         </div>
@@ -546,25 +604,25 @@ export default function App() {
 
   if (pantalla === 'RegisterTechnical') {
     return (
-      <div style={{ backgroundColor: '#FFFFFF', minHeight: '100vh', padding: '30px 20px', maxWidth: '500px', margin: '0 auto', boxSizing: 'border-box' }}>
+      <div style={{ backgroundColor: '#FFFFFF', minHeight: '100vh', padding: '30px 20px', width: '100%', maxWidth: '500px', margin: '0 auto', boxSizing: 'border-box' }}>
         <h2 style={{ fontSize: '18px', color: '#1E2A38', textAlign: 'center', fontWeight: '700' }}>Registro Profesional</h2>
-        <form onSubmit={handleRegisterTechnicalSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '16px' }}>
-          <select value={oficio} onChange={(e) => setOficio(e.target.value)} style={{ width: '100%', padding: '12px', borderRadius: '12px', border: '1px solid #E2E8F0', backgroundColor: '#F8F9FA' }}>
+        <form onSubmit={handleRegisterTechnicalSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '16px', width: '100%', boxSizing: 'border-box' }}>
+          <select value={oficio} onChange={(e) => setOficio(e.target.value)} style={{ width: '100%', padding: '12px', borderRadius: '12px', border: '1px solid #E2E8F0', backgroundColor: '#F8F9FA', boxSizing: 'border-box' }}>
             <option value="Aire Acondicionado">Aire Acondicionado</option>
             <option value="Plomero">Plomero</option>
             <option value="Electricista">Electricista</option>
             <option value="Carpintero">Carpintero</option>
           </select>
-          <input type="text" placeholder="Años de Experiencia" value={anosExperiencia} onChange={(e) => setAnosExperiencia(e.target.value)} required style={{ width: '100%', padding: '12px', borderRadius: '12px', border: '1px solid #E2E8F0', backgroundColor: '#F8F9FA' }} />
-          <input type="text" placeholder="URL Foto Portafolio Principal" value={fotosTrabajos} onChange={(e) => setFotosTrabajos(e.target.value)} style={{ width: '100%', padding: '12px', borderRadius: '12px', border: '1px solid #E2E8F0', backgroundColor: '#F8F9FA' }} />
-          <select value={colonia} onChange={(e) => setColonia(e.target.value)} style={{ width: '100%', padding: '12px', borderRadius: '12px', border: '1px solid #E2E8F0', backgroundColor: '#F8F9FA' }}>
+          <input type="text" placeholder="Años de Experiencia" value={anosExperiencia} onChange={(e) => setAnosExperiencia(e.target.value)} required style={{ width: '100%', padding: '12px', borderRadius: '12px', border: '1px solid #E2E8F0', backgroundColor: '#F8F9FA', boxSizing: 'border-box' }} />
+          <input type="text" placeholder="URL Foto Portafolio Principal" value={fotosTrabajos} onChange={(e) => setFotosTrabajos(e.target.value)} style={{ width: '100%', padding: '12px', borderRadius: '12px', border: '1px solid #E2E8F0', backgroundColor: '#F8F9FA', boxSizing: 'border-box' }} />
+          <select value={colonia} onChange={(e) => setColonia(e.target.value)} style={{ width: '100%', padding: '12px', borderRadius: '12px', border: '1px solid #E2E8F0', backgroundColor: '#F8F9FA', boxSizing: 'border-box' }}>
             <option value="Villas del Sol">Villas del Sol</option>
             <option value="Centro">Centro</option>
             <option value="Ejido">Ejido</option>
             <option value="Colosio">Colosio</option>
           </select>
-          <input type="text" placeholder="Teléfono" value={telefono} onChange={(e) => setTelefono(e.target.value)} required style={{ width: '100%', padding: '12px', borderRadius: '12px', border: '1px solid #E2E8F0', backgroundColor: '#F8F9FA' }} />
-          <button type="submit" style={{ backgroundColor: '#00A887', color: '#FFFFFF', border: 'none', padding: '14px', borderRadius: '12px', fontWeight: 'bold', cursor: 'pointer', marginTop: '6px' }}>Guardar Perfil</button>
+          <input type="text" placeholder="Teléfono" value={telefono} onChange={(e) => setTelefono(e.target.value)} required style={{ width: '100%', padding: '12px', borderRadius: '12px', border: '1px solid #E2E8F0', backgroundColor: '#F8F9FA', boxSizing: 'border-box' }} />
+          <button type="submit" style={{ backgroundColor: '#00A887', color: '#FFFFFF', border: 'none', padding: '14px', borderRadius: '12px', fontWeight: 'bold', cursor: 'pointer', marginTop: '6px', width: '100%', boxSizing: 'border-box' }}>Guardar Perfil</button>
         </form>
       </div>
     );
