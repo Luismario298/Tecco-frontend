@@ -23,10 +23,10 @@ const COLORS = {
 
 export default function App() {
   const [pantalla, setPantalla] = useState('loading');
-  const [navTab, setNavTab] = useState('inicio'); 
+  const [navTab, setNavTab] = useState('inicio');
   const [routeParams, setRouteParams] = useState({ role: 'cliente', initialMode: 'login' });
 
-  // Control estricto de sesión y usuario
+  // Control estricto de sesión activa y datos del usuario logueado
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [currentUserDocId, setCurrentUserDocId] = useState(null);
   const [pantallaPendiente, setPantallaPendiente] = useState(null);
@@ -67,7 +67,7 @@ export default function App() {
   const [chatActivo, setChatActivo] = useState(false);
   const [chatSalaInfo, setChatSalaInfo] = useState(null);
 
-  // Solicitud de Servicio
+  // Solicitud de Servicio (Cliente)
   const [detallesFallaCliente, setDetallesFallaCliente] = useState("");
   const [zonaSolicitud, setZonaSolicitud] = useState("Villas del Sol");
   const [enviandoSolicitud, setEnviandoSolicitud] = useState(false);
@@ -115,7 +115,6 @@ export default function App() {
     cargarDatosFirestore();
   }, []);
 
-  // CARGA DE PORTAFOLIO EN TIEMPO REAL PARA EL PERFIL DEL CLIENTE
   const abrirPerfilDetallado = async (trabajador) => {
     setPerfilSeleccionado(trabajador);
     setPantalla('DetallePerfil');
@@ -127,7 +126,7 @@ export default function App() {
       const fotos = querySnapshot.docs.map(doc => doc.data());
       setGaleriaPortafolio(fotos);
     } catch (error) {
-      console.error("Error al cargar portafolio del trabajador:", error);
+      console.error("Error al cargar portafolio:", error);
     } finally {
       setCargandoGaleria(false);
     }
@@ -139,7 +138,7 @@ export default function App() {
     }
 
     if (!isAuthenticated) {
-      alert('🔒 Para solicitar un servicio primero debes iniciar sesión o crear una cuenta.');
+      alert('Para solicitar un servicio primero debes iniciar sesión o crear una cuenta.');
       setPantallaPendiente('SolicitarTrabajo');
       setIsLogin(true);
       navigation.navigate('Auth', { role: 'cliente', initialMode: 'login' });
@@ -152,7 +151,7 @@ export default function App() {
   const handleEnviarSolicitudTrabajo = async (e) => {
     e.preventDefault();
     if (!isAuthenticated) {
-      alert('🔒 Sesión requerida para enviar la solicitud.');
+      alert('Sesión requerida para enviar la solicitud.');
       setPantallaPendiente('SolicitarTrabajo');
       setPantalla('Auth');
       return;
@@ -176,7 +175,7 @@ export default function App() {
         fecha_creacion: new Date().toISOString()
       });
 
-      alert('¡Solicitud de servicio enviada con éxito al especialista!');
+      alert('Solicitud de servicio enviada con éxito al especialista.');
       setDetallesFallaCliente("");
       await cargarDatosFirestore();
       setPantalla('Home');
@@ -236,7 +235,7 @@ export default function App() {
         setCurrentUserDocId(docRef.id);
       }
 
-      alert('✅ ¡Tu servicio ha sido publicado y actualizado en el catálogo!');
+      alert('Tu servicio ha sido publicado y actualizado en el catálogo.');
       await cargarDatosFirestore();
       setNavTab('panel');
     } catch (error) {
@@ -251,11 +250,11 @@ export default function App() {
     const emailLimpio = email.trim().toLowerCase();
 
     if (!emailLimpio || !password || (!isLogin && (!nombre.trim() || !confirmPassword))) {
-      alert('⚠️ Campos incompletos: Por favor llena todos los campos obligatorios.');
+      alert('Campos incompletos: Por favor llena todos los campos obligatorios.');
       return;
     }
     if (!isLogin && password !== confirmPassword) {
-      alert('❌ Error: Las contraseñas no coinciden.');
+      alert('Error: Las contraseñas no coinciden.');
       return;
     }
 
@@ -272,7 +271,7 @@ export default function App() {
         const querySnapshot = await getDocs(q);
 
         if (querySnapshot.empty) {
-          alert('❌ Acceso denegado: El correo o la contraseña son incorrectos, o la cuenta no está registrada en Firebase.');
+          alert('Acceso denegado: El correo o la contraseña son incorrectos, o la cuenta no está registrada en la base de datos.');
           return;
         }
 
@@ -294,7 +293,7 @@ export default function App() {
           setFotosTrabajos(userData.fotosTrabajos || '');
         }
 
-        alert(`¡Bienvenido de nuevo, ${userData.nombre || 'Usuario'}!`);
+        alert(`Bienvenido de nuevo, ${userData.nombre || 'Usuario'}.`);
         await cargarDatosFirestore();
 
         if (pantallaPendiente && rolActual === 'cliente') {
@@ -310,7 +309,7 @@ export default function App() {
         const checkSnapshot = await getDocs(qCheck);
 
         if (!checkSnapshot.empty) {
-          alert('⚠️ Este correo ya está registrado en Firebase. Por favor inicia sesión con tus datos.');
+          alert('Este correo ya está registrado. Por favor inicia sesión con tus datos.');
           setIsLogin(true);
           return;
         }
@@ -322,7 +321,7 @@ export default function App() {
             ineUrlSubida = await CloudinaryService.subirImagen(archivoIne);
             setSubiendoIne(false);
             if (!ineUrlSubida) {
-              alert("Error al subir la INE a Cloudinary.");
+              alert("Error al subir la identificación.");
               return;
             }
           }
@@ -338,7 +337,7 @@ export default function App() {
           setCurrentUserDocId(docRef.id);
           setEmail(emailLimpio);
           setIsAuthenticated(true);
-          alert('✅ ¡Cuenta creada y guardada en Firebase exitosamente!');
+          alert('Cuenta creada y guardada exitosamente.');
           await cargarDatosFirestore();
 
           if (pantallaPendiente) {
@@ -353,7 +352,7 @@ export default function App() {
       }
     } catch (error) {
       console.error("Error en autenticación con Firebase:", error);
-      alert('Ocurrió un error al validar tus datos con Firebase.');
+      alert('Ocurrió un error al validar tus datos.');
       setSubiendoIne(false);
     }
   };
@@ -374,7 +373,7 @@ export default function App() {
         setNombre(dummyNombre);
         setEmail(dummyEmail);
         setIsAuthenticated(true);
-        alert(`¡Sesión iniciada exitosamente con ${providerName}!`);
+        alert(`Sesión iniciada exitosamente con ${providerName}.`);
         await cargarDatosFirestore();
       } else {
         const docRef = await addDoc(collection(db, coleccionObjetivo), {
@@ -393,7 +392,7 @@ export default function App() {
         setNombre(dummyNombre);
         setEmail(dummyEmail);
         setIsAuthenticated(true);
-        alert(`¡Cuenta creada y acceso concedido vía ${providerName} en Firebase!`);
+        alert(`Cuenta creada y acceso concedido vía ${providerName}.`);
         await cargarDatosFirestore();
       }
 
@@ -440,7 +439,7 @@ export default function App() {
       setCurrentUserDocId(docRef.id);
       setEmail(emailFinal);
       setIsAuthenticated(true);
-      alert('✅ ¡Perfil profesional y credenciales guardados exitosamente en Firebase!');
+      alert('Perfil profesional y credenciales guardados exitosamente.');
       await cargarDatosFirestore();
       setPantalla('Home');
       setNavTab('panel');
@@ -462,54 +461,53 @@ export default function App() {
     alert("Has cerrado sesión.");
   };
 
+  // Barra de Navegación Inferior sin emojis
   const renderBottomNav = () => {
     const esColaborador = route.params.role === 'trabajador' && isAuthenticated;
 
     if (esColaborador) {
       return (
-        <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, backgroundColor: '#101B22', borderTop: `1px solid ${COLORS.border}`, display: 'flex', justifyContent: 'space-around', padding: '10px 0', zIndex: 1000, boxSizing: 'border-box' }}>
+        <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, backgroundColor: '#101B22', borderTop: `1px solid ${COLORS.border}`, display: 'flex', justifyContent: 'space-around', padding: '14px 0', zIndex: 1000, boxSizing: 'border-box' }}>
           <div onClick={() => { setPantalla('Home'); setNavTab('panel'); }} style={{ textAlign: 'center', cursor: 'pointer', color: navTab === 'panel' ? COLORS.accentWorker : COLORS.textSecondary }}>
-            <div style={{ fontSize: '20px' }}>📊</div>
-            <div style={{ fontSize: '11px', fontWeight: 'bold', marginTop: '2px' }}>Mi Panel</div>
+            <div style={{ fontSize: '12px', fontWeight: 'bold' }}>Mi Panel</div>
           </div>
           <div onClick={() => { setPantalla('Home'); setNavTab('mi_servicio'); }} style={{ textAlign: 'center', cursor: 'pointer', color: navTab === 'mi_servicio' ? COLORS.accentWorker : COLORS.textSecondary }}>
-            <div style={{ fontSize: '20px' }}>🛠️</div>
-            <div style={{ fontSize: '11px', fontWeight: 'bold', marginTop: '2px' }}>Publicar Servicio</div>
+            <div style={{ fontSize: '12px', fontWeight: 'bold' }}>Publicar Servicio</div>
           </div>
           <div onClick={() => { setPantalla('Home'); setNavTab('solicitudes'); }} style={{ textAlign: 'center', cursor: 'pointer', color: navTab === 'solicitudes' ? COLORS.accentWorker : COLORS.textSecondary }}>
-            <div style={{ fontSize: '20px' }}>📥</div>
-            <div style={{ fontSize: '11px', fontWeight: 'bold', marginTop: '2px' }}>Solicitudes</div>
+            <div style={{ fontSize: '12px', fontWeight: 'bold' }}>Solicitudes</div>
           </div>
         </div>
       );
     }
 
     return (
-      <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, backgroundColor: '#101B22', borderTop: `1px solid ${COLORS.border}`, display: 'flex', justifyContent: 'space-around', padding: '10px 0', zIndex: 1000, boxSizing: 'border-box' }}>
-        <div onClick={() => { setPantalla('Home'); setNavTab('inicio'); }} style={{ textAlign: 'center', cursor: 'pointer', color: navTab === 'inicio' ? COLORS.primary : COLORS.textSecondary }}>
-          <div style={{ fontSize: '20px' }}>🔍</div>
-          <div style={{ fontSize: '11px', fontWeight: 'bold', marginTop: '2px' }}>Inicio</div>
+      <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, backgroundColor: '#101B22', borderTop: `1px solid ${COLORS.border}`, display: 'flex', justifyContent: 'space-around', padding: '14px 0', zIndex: 1000, boxSizing: 'border-box' }}>
+        <div onClick={() => { setPantalla('Home'); setNavTab('inicio'); setVistaModo('lista'); }} style={{ textAlign: 'center', cursor: 'pointer', color: navTab === 'inicio' ? COLORS.primary : COLORS.textSecondary }}>
+          <div style={{ fontSize: '12px', fontWeight: 'bold' }}>Inicio</div>
         </div>
         <div onClick={() => { setPantalla('Home'); setNavTab('mensajes'); }} style={{ textAlign: 'center', cursor: 'pointer', color: navTab === 'mensajes' ? COLORS.primary : COLORS.textSecondary }}>
-          <div style={{ fontSize: '20px' }}>💬</div>
-          <div style={{ fontSize: '11px', fontWeight: 'bold', marginTop: '2px' }}>Mensajes</div>
+          <div style={{ fontSize: '12px', fontWeight: 'bold' }}>Mensajes</div>
         </div>
         <div onClick={() => { setPantalla('Home'); setNavTab('cuenta'); }} style={{ textAlign: 'center', cursor: 'pointer', color: navTab === 'cuenta' ? COLORS.primary : COLORS.textSecondary }}>
-          <div style={{ fontSize: '20px' }}>👤</div>
-          <div style={{ fontSize: '11px', fontWeight: 'bold', marginTop: '2px' }}>Cuenta</div>
+          <div style={{ fontSize: '12px', fontWeight: 'bold' }}>Cuenta</div>
         </div>
       </div>
     );
   };
 
+  // =========================================================================
+  // PANTALLA PRINCIPAL (HOME)
+  // =========================================================================
   if (pantalla === 'Home') {
     const esColaborador = route.params.role === 'trabajador' && isAuthenticated;
 
+    // 1. VISTA EXCLUSIVA PARA COLABORADOR
     if (esColaborador) {
       const misSolicitudes = solicitudes.filter(s => s.destinatario === nombre || !s.destinatario);
 
       return (
-        <div style={{ backgroundColor: COLORS.background, minHeight: '100vh', padding: '16px 16px 90px 16px', fontFamily: 'Inter, sans-serif', boxSizing: 'border-box', color: COLORS.textMain }}>
+        <div style={{ backgroundColor: COLORS.background, minHeight: '100vh', padding: '16px 16px 80px 16px', fontFamily: 'Inter, sans-serif', boxSizing: 'border-box', color: COLORS.textMain }}>
           <div style={{ maxWidth: '600px', margin: '0 auto' }}>
 
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#131F2A', padding: '14px 16px', borderRadius: '16px', border: `1px solid ${COLORS.border}`, marginBottom: '20px' }}>
@@ -533,7 +531,7 @@ export default function App() {
                   <div>
                     <h3 style={{ fontSize: '15px', margin: '0 0 4px 0', color: COLORS.textMain }}>Estado en el Mapa y Lista</h3>
                     <p style={{ fontSize: '12px', color: disponible ? COLORS.primary : COLORS.textSecondary, margin: 0, fontWeight: 'bold' }}>
-                      {disponible ? '🟢 Visible para clientes ahora' : '🔴 Oculto (No recibiendo trabajos)'}
+                      {disponible ? 'Activo: Visible para clientes ahora' : 'Inactivo: Oculto del catálogo'}
                     </p>
                   </div>
                   <button 
@@ -546,14 +544,12 @@ export default function App() {
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '20px' }}>
                   <div style={{ backgroundColor: COLORS.card, padding: '16px', borderRadius: '16px', border: `1px solid ${COLORS.border}` }}>
-                    <span style={{ fontSize: '22px' }}>📥</span>
-                    <h4 style={{ fontSize: '22px', margin: '6px 0 2px 0', color: COLORS.textMain }}>{misSolicitudes.length}</h4>
-                    <p style={{ fontSize: '12px', color: COLORS.textSecondary, margin: 0 }}>Solicitudes Activas</p>
+                    <p style={{ fontSize: '12px', color: COLORS.textSecondary, margin: '0 0 4px 0' }}>Solicitudes Activas</p>
+                    <h4 style={{ fontSize: '24px', margin: 0, color: COLORS.textMain }}>{misSolicitudes.length}</h4>
                   </div>
                   <div style={{ backgroundColor: COLORS.card, padding: '16px', borderRadius: '16px', border: `1px solid ${COLORS.border}` }}>
-                    <span style={{ fontSize: '22px' }}>⭐</span>
-                    <h4 style={{ fontSize: '22px', margin: '6px 0 2px 0', color: '#E2B714' }}>5.0</h4>
-                    <p style={{ fontSize: '12px', color: COLORS.textSecondary, margin: 0 }}>Tu Calificación</p>
+                    <p style={{ fontSize: '12px', color: COLORS.textSecondary, margin: '0 0 4px 0' }}>Calificación</p>
+                    <h4 style={{ fontSize: '24px', margin: 0, color: '#E2B714' }}>5.0</h4>
                   </div>
                 </div>
 
@@ -563,7 +559,7 @@ export default function App() {
                     <span style={{ fontSize: '13px', fontWeight: 'bold', color: COLORS.primary }}>{precioServicio}</span>
                   </div>
                   <h3 style={{ fontSize: '17px', margin: '0 0 4px 0', color: COLORS.textMain }}>{oficio}</h3>
-                  <p style={{ fontSize: '12px', color: COLORS.textSecondary, margin: '0 0 12px 0' }}>📍 Zona base: {colonia} · Exp: {anosExperiencia}</p>
+                  <p style={{ fontSize: '12px', color: COLORS.textSecondary, margin: '0 0 12px 0' }}>Zona base: {colonia} · Exp: {anosExperiencia}</p>
                   {descripcionServicio && (
                     <p style={{ fontSize: '13px', color: '#CBD5E0', backgroundColor: COLORS.background, padding: '10px', borderRadius: '10px', margin: '0 0 14px 0' }}>
                       "{descripcionServicio}"
@@ -574,13 +570,13 @@ export default function App() {
                       onClick={() => setNavTab('mi_servicio')}
                       style={{ flex: 1, backgroundColor: COLORS.accentWorker, color: '#000', border: 'none', padding: '12px', borderRadius: '12px', fontWeight: 'bold', fontSize: '13px', cursor: 'pointer' }}
                     >
-                      ✏️ Editar / Publicar Servicio
+                      Editar / Publicar Servicio
                     </button>
                     <button 
                       onClick={() => setPantalla('UploadPortfolio')}
                       style={{ flex: 1, backgroundColor: '#1E2D38', color: COLORS.textMain, border: `1px solid ${COLORS.border}`, padding: '12px', borderRadius: '12px', fontWeight: 'bold', fontSize: '13px', cursor: 'pointer' }}
                     >
-                      📸 Subir Fotos
+                      Subir Fotos
                     </button>
                   </div>
                 </div>
@@ -589,7 +585,7 @@ export default function App() {
 
             {navTab === 'mi_servicio' && (
               <div style={{ backgroundColor: COLORS.card, borderRadius: '16px', padding: '20px', border: `1px solid ${COLORS.border}` }}>
-                <h2 style={{ fontSize: '18px', fontWeight: 'bold', color: COLORS.accentWorker, margin: '0 0 4px 0' }}>🛠️ Publicar / Configurar Mi Servicio</h2>
+                <h2 style={{ fontSize: '18px', fontWeight: 'bold', color: COLORS.accentWorker, margin: '0 0 4px 0' }}>Publicar / Configurar Mi Servicio</h2>
                 <p style={{ fontSize: '12px', color: COLORS.textSecondary, margin: '0 0 18px 0' }}>Esta información es la que verán los clientes en Playa del Carmen cuando busquen ayuda.</p>
 
                 <form onSubmit={handleGuardarMiServicio} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
@@ -679,7 +675,7 @@ export default function App() {
                     disabled={guardandoServicio}
                     style={{ backgroundColor: COLORS.accentWorker, color: '#000000', border: 'none', padding: '14px', borderRadius: '12px', fontWeight: 'bold', fontSize: '15px', cursor: 'pointer', marginTop: '6px', width: '100%' }}
                   >
-                    {guardandoServicio ? 'Publicando en Firebase...' : '🚀 Publicar y Guardar Servicio'}
+                    {guardandoServicio ? 'Publicando...' : 'Publicar y Guardar Servicio'}
                   </button>
                 </form>
               </div>
@@ -704,6 +700,7 @@ export default function App() {
       );
     }
 
+    // 2. VISTA PARA CLIENTE
     const trabajadoresFiltrados = filtroOficio === 'Todos' 
       ? trabajadores 
       : trabajadores.filter(t => t.oficio?.toLowerCase() === filtroOficio.toLowerCase());
@@ -717,11 +714,12 @@ export default function App() {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
                 <p style={{ fontSize: '12px', color: COLORS.textSecondary, margin: 0 }}>Playa del Carmen, Q. Roo</p>
                 {isAuthenticated && (
-                  <span style={{ fontSize: '11px', color: COLORS.primary, fontWeight: 'bold' }}>🟢 {nombre || email}</span>
+                  <span style={{ fontSize: '11px', color: COLORS.primary, fontWeight: 'bold' }}>Sesión activa: {nombre || email}</span>
                 )}
               </div>
               <h2 style={{ fontSize: '22px', fontWeight: 'bold', color: COLORS.textMain, margin: '0 0 16px 0' }}>¿Qué necesitas arreglar?</h2>
 
+              {/* Filtros de Oficios */}
               <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', overflowX: 'auto', paddingBottom: '4px' }}>
                 {['Todos', 'Plomero', 'Electricista', 'Carpintero', 'Pintor', 'Aire acondicionado'].map((ofItem) => (
                   <button
@@ -744,6 +742,7 @@ export default function App() {
                 ))}
               </div>
 
+              {/* Selector Lista / Mapa */}
               <div style={{ display: 'flex', backgroundColor: COLORS.card, borderRadius: '12px', padding: '4px', marginBottom: '20px', border: `1px solid ${COLORS.border}` }}>
                 <button 
                   onClick={() => setVistaModo('lista')}
@@ -759,9 +758,10 @@ export default function App() {
                 </button>
               </div>
 
+              {/* Mapa único embebido sin duplicación */}
               {vistaModo === 'mapa' ? (
-                <div style={{ height: '50vh', width: '100%', borderRadius: '16px', overflow: 'hidden', border: `1px solid ${COLORS.border}` }}>
-                  <FullMapScreen route={{ params: { trabajadores } }} navigation={navigation} />
+                <div style={{ height: '55vh', width: '100%', borderRadius: '16px', overflow: 'hidden', border: `1px solid ${COLORS.border}` }}>
+                  <FullMapScreen route={{ params: { trabajadores: trabajadoresFiltrados } }} navigation={navigation} embedded={true} />
                 </div>
               ) : (
                 <div>
@@ -777,13 +777,13 @@ export default function App() {
                         style={{ backgroundColor: COLORS.card, borderRadius: '16px', padding: '16px', marginBottom: '14px', border: `1px solid ${COLORS.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
                       >
                         <div style={{ display: 'flex', gap: '14px', alignItems: 'center', flex: 1 }}>
-                          <div style={{ width: '48px', height: '48px', borderRadius: '50%', backgroundColor: '#1E2D38', display: 'flex', justifyContent: 'center', alignItems: 'center', fontSize: '20px' }}>
-                            🛠️
+                          <div style={{ width: '44px', height: '44px', borderRadius: '50%', backgroundColor: '#1E2D38', color: COLORS.primary, display: 'flex', justifyContent: 'center', alignItems: 'center', fontSize: '16px', fontWeight: 'bold' }}>
+                            {item.nombre ? item.nombre.charAt(0).toUpperCase() : 'T'}
                           </div>
                           <div>
                             <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: COLORS.textMain, margin: '0 0 2px 0' }}>{item.nombre}</h3>
                             <p style={{ fontSize: '12px', color: COLORS.textSecondary, margin: '0 0 6px 0' }}>{item.oficio} · {item.colonia || 'Centro'}</p>
-                            <p style={{ fontSize: '12px', color: '#E2B714', margin: 0, fontWeight: 'bold' }}>★ {item.rating || '4.9'} <span style={{ color: COLORS.textSecondary, fontWeight: 'normal' }}>(70+)</span></p>
+                            <p style={{ fontSize: '12px', color: '#E2B714', margin: 0, fontWeight: 'bold' }}>Calificación: {item.rating || '4.9'} <span style={{ color: COLORS.textSecondary, fontWeight: 'normal' }}>(70+)</span></p>
                           </div>
                         </div>
                         <div style={{ textAlign: 'right' }}>
@@ -799,7 +799,7 @@ export default function App() {
 
           {navTab === 'mensajes' && (
             <div>
-              <h2 style={{ fontSize: '20px', fontWeight: 'bold', color: COLORS.textMain, marginBottom: '16px' }}>💬 Mensajes y Solicitudes</h2>
+              <h2 style={{ fontSize: '20px', fontWeight: 'bold', color: COLORS.textMain, marginBottom: '16px' }}>Mensajes y Solicitudes</h2>
               {!isAuthenticated ? (
                 <div style={{ backgroundColor: COLORS.card, padding: '20px', borderRadius: '16px', border: `1px solid ${COLORS.border}`, textAlign: 'center' }}>
                   <p style={{ color: COLORS.textSecondary, fontSize: '13px', marginBottom: '12px' }}>Inicia sesión para ver tus mensajes y solicitudes.</p>
@@ -840,7 +840,7 @@ export default function App() {
                 </div>
               ) : (
                 <div style={{ backgroundColor: COLORS.card, borderRadius: '16px', padding: '20px', border: `1px solid ${COLORS.border}`, marginBottom: '16px' }}>
-                  <p style={{ fontSize: '15px', fontWeight: 'bold', color: COLORS.textMain, margin: '0 0 4px 0' }}>👤 {nombre || 'Usuario Activo'}</p>
+                  <p style={{ fontSize: '15px', fontWeight: 'bold', color: COLORS.textMain, margin: '0 0 4px 0' }}>{nombre || 'Usuario Activo'}</p>
                   <p style={{ fontSize: '12px', color: COLORS.textSecondary, margin: '0 0 12px 0' }}>{email} · Rol: CLIENTE</p>
 
                   <button 
@@ -870,8 +870,11 @@ export default function App() {
     );
   }
 
+  // =========================================================================
+  // RESTO DE PANTALLAS
+  // =========================================================================
   if (pantalla === 'Map') return <MapScreen navigation={navigation} />;
-  if (pantalla === 'FullMap') return <FullMapScreen route={route} navigation={navigation} />;
+  if (pantalla === 'FullMap') return <FullMapScreen route={route} navigation={navigation} embedded={false} />;
   if (pantalla === 'WorkerProfile') {
     return (
       <WorkerProfile 
@@ -886,7 +889,7 @@ export default function App() {
       <UploadPortfolio 
         workerEmail={email || route.params.email} 
         workerName={nombre || route.params.nombre} 
-        onBack={() => { cargarDatosFirestore(); setPantalla('Home'); setNavTab('panel'); }} 
+        onBack={() => { cargarDatosFirestore(); setPantalla('Home'); }} 
       />
     );
   }
@@ -906,7 +909,7 @@ export default function App() {
       <div style={{ backgroundColor: COLORS.background, minHeight: '100vh', padding: '16px', fontFamily: 'Inter, sans-serif', width: '100%', maxWidth: '480px', margin: '0 auto', boxSizing: 'border-box', color: COLORS.textMain }}>
         <div style={{ display: 'flex', alignItems: 'center', marginBottom: '16px', backgroundColor: COLORS.card, padding: '12px 16px', borderRadius: '14px', border: `1px solid ${COLORS.border}` }}>
           <button onClick={() => setPantalla(targetWorker ? 'DetallePerfil' : 'Home')} style={{ background: 'none', border: 'none', fontSize: '16px', cursor: 'pointer', marginRight: '12px', fontWeight: 'bold', color: COLORS.primary }}>← Volver</button>
-          <h2 style={{ fontSize: '16px', color: COLORS.textMain, margin: 0, fontWeight: '700' }}>🛒 Solicitar Cotización / Servicio</h2>
+          <h2 style={{ fontSize: '16px', color: COLORS.textMain, margin: 0, fontWeight: '700' }}>Solicitar Cotización / Servicio</h2>
         </div>
 
         <div style={{ backgroundColor: COLORS.card, borderRadius: '16px', padding: '20px', border: `1px solid ${COLORS.border}`, width: '100%', boxSizing: 'border-box' }}>
@@ -948,7 +951,7 @@ export default function App() {
               disabled={enviandoSolicitud}
               style={{ backgroundColor: COLORS.primary, color: '#000000', border: 'none', width: '100%', padding: '14px', borderRadius: '12px', fontSize: '15px', fontWeight: 'bold', cursor: 'pointer', marginTop: '6px', boxSizing: 'border-box' }}
             >
-              {enviandoSolicitud ? 'Enviando a Firebase...' : '🚀 Enviar Solicitud'}
+              {enviandoSolicitud ? 'Enviando...' : 'Enviar Solicitud'}
             </button>
           </form>
         </div>
@@ -956,7 +959,6 @@ export default function App() {
     );
   }
 
-  // PANTALLA DE DETALLE DE PERFIL CON VISUALIZACIÓN DE PORTAFOLIO DEL COLABORADOR
   if (pantalla === 'DetallePerfil' && perfilSeleccionado) {
     return (
       <div style={{ backgroundColor: COLORS.background, minHeight: '100vh', paddingBottom: '40px', fontFamily: 'Inter, sans-serif', width: '100%', maxWidth: '600px', margin: '0 auto', boxSizing: 'border-box', color: COLORS.textMain }}>
@@ -968,23 +970,23 @@ export default function App() {
         <div style={{ backgroundColor: COLORS.card, borderRadius: '20px', margin: '-50px 16px 16px 16px', padding: '20px', border: `1px solid ${COLORS.border}`, position: 'relative', width: 'calc(100% - 32px)', boxSizing: 'border-box' }}>
           <h1 style={{ fontSize: '22px', color: COLORS.textMain, textAlign: 'center', margin: '0 0 4px 0', fontWeight: '700' }}>{perfilSeleccionado.nombre}</h1>
           <p style={{ textAlign: 'center', color: COLORS.primary, fontSize: '14px', fontWeight: 'bold', margin: '0 0 6px 0' }}>{perfilSeleccionado.oficio} · {perfilSeleccionado.precio || '$350/visita'}</p>
-          <p style={{ textAlign: 'center', color: COLORS.textSecondary, fontSize: '13px', margin: '0 0 14px 0' }}>📍 Zona: {perfilSeleccionado.colonia || 'Centro'}</p>
+          <p style={{ textAlign: 'center', color: COLORS.textSecondary, fontSize: '13px', margin: '0 0 14px 0' }}>Zona: {perfilSeleccionado.colonia || 'Centro'}</p>
           
           {perfilSeleccionado.descripcion && (
-            <p style={{ fontSize: '13px', color: '#CBD5E0', backgroundColor: COLORS.background, padding: '12px', borderRadius: '12px', margin: '0 0 16px 0', textAlign: 'center' }}>
+            <p style={{ fontSize: '13px', color: '#CBD5E0', backgroundColor: COLORS.background, padding: '12px', borderRadius: '12px', margin: '0 0 14px 0', textAlign: 'center' }}>
               "{perfilSeleccionado.descripcion}"
             </p>
           )}
 
           <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-            <button onClick={() => irASolicitarServicio(perfilSeleccionado)} style={{ flex: 1, backgroundColor: COLORS.primary, color: '#000000', border: 'none', padding: '14px', borderRadius: '12px', fontSize: '14px', fontWeight: 'bold', cursor: 'pointer' }}>🛠️ Solicitar Servicio</button>
-            <button onClick={() => { setChatSalaInfo(null); setChatActivo(true); }} style={{ flex: 1, backgroundColor: '#222D37', color: COLORS.textMain, border: 'none', padding: '14px', borderRadius: '12px', fontSize: '14px', fontWeight: 'bold', cursor: 'pointer' }}>💬 Chat y Negociar</button>
+            <button onClick={() => irASolicitarServicio(perfilSeleccionado)} style={{ flex: 1, backgroundColor: COLORS.primary, color: '#000000', border: 'none', padding: '14px', borderRadius: '12px', fontSize: '14px', fontWeight: 'bold', cursor: 'pointer' }}>Solicitar Servicio</button>
+            <button onClick={() => { setChatSalaInfo(null); setChatActivo(true); }} style={{ flex: 1, backgroundColor: '#222D37', color: COLORS.textMain, border: 'none', padding: '14px', borderRadius: '12px', fontSize: '14px', fontWeight: 'bold', cursor: 'pointer' }}>Chat y Negociar</button>
           </div>
         </div>
 
         {/* Galería de Trabajos Subidos por el Colaborador */}
         <div style={{ padding: '0 16px' }}>
-          <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: COLORS.textMain, marginBottom: '12px' }}>🖼️ Galería de Trabajos Previos</h3>
+          <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: COLORS.textMain, marginBottom: '12px' }}>Galería de Trabajos Previos</h3>
           
           {cargandoGaleria ? (
             <p style={{ textAlign: 'center', color: COLORS.textSecondary, padding: '20px' }}>Cargando galería del especialista...</p>
@@ -1005,7 +1007,6 @@ export default function App() {
             </div>
           )}
         </div>
-
       </div>
     );
   }
@@ -1031,7 +1032,7 @@ export default function App() {
           onClick={() => { setPantalla('Home'); setNavTab('inicio'); }} 
           style={{ backgroundColor: COLORS.primary, color: '#000000', border: 'none', width: '100%', padding: '16px', borderRadius: '16px', fontSize: '16px', fontWeight: 'bold', cursor: 'pointer', boxSizing: 'border-box', boxShadow: '0 4px 12px rgba(0, 168, 135, 0.3)' }}
         >
-          Comenzar &gt;
+          Comenzar
         </button>
       </div>
     );
@@ -1052,11 +1053,9 @@ export default function App() {
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
           <div onClick={() => navigation.navigate('Auth', { role: 'cliente', initialMode: 'login' })} style={{ backgroundColor: COLORS.card, padding: '18px', borderRadius: '16px', display: 'flex', alignItems: 'center', gap: '16px', cursor: 'pointer', border: `1px solid ${COLORS.border}` }}>
-            <span style={{ fontSize: '28px' }}>🏠</span>
             <div><h3 style={{ fontSize: '15px', margin: '0 0 2px 0', color: COLORS.textMain }}>Pedir Servicio Técnico</h3><p style={{ fontSize: '12px', color: COLORS.textSecondary, margin: 0 }}>Perfil Cliente</p></div>
           </div>
           <div onClick={() => navigation.navigate('Auth', { role: 'trabajador', initialMode: 'login' })} style={{ backgroundColor: COLORS.card, padding: '18px', borderRadius: '16px', display: 'flex', alignItems: 'center', gap: '16px', cursor: 'pointer', border: `1px solid ${COLORS.accentWorker}` }}>
-            <span style={{ fontSize: '28px' }}>🛠️</span>
             <div><h3 style={{ fontSize: '15px', margin: '0 0 2px 0', color: COLORS.accentWorker }}>Ofrecer Mis Servicios</h3><p style={{ fontSize: '12px', color: COLORS.textSecondary, margin: 0 }}>Panel Colaborador y Publicación</p></div>
           </div>
         </div>
@@ -1077,7 +1076,7 @@ export default function App() {
         <div style={{ textAlign: 'center', marginBottom: '24px' }}>
           <h2 style={{ fontSize: '20px', color: COLORS.textMain, fontWeight: '700' }}>{isLogin ? 'Iniciar Sesión' : 'Crear Cuenta'}</h2>
           <p style={{ fontSize: '12px', color: route.params.role === 'trabajador' ? COLORS.accentWorker : COLORS.primary, fontWeight: 'bold' }}>
-            {route.params.role === 'trabajador' ? '🛠️ Modo Colaborador' : '🏠 Modo Cliente'}
+            {route.params.role === 'trabajador' ? 'Modo Colaborador' : 'Modo Cliente'}
           </p>
         </div>
 
@@ -1122,14 +1121,14 @@ export default function App() {
               onClick={() => handleSocialAuth('Google')}
               style={{ backgroundColor: COLORS.card, border: `1px solid ${COLORS.border}`, color: COLORS.textMain, padding: '12px', borderRadius: '12px', fontSize: '14px', fontWeight: 'bold', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '8px', width: '100%', boxSizing: 'border-box' }}
             >
-              🌐 Continuar con Google
+              Continuar con Google
             </button>
 
             <button 
               onClick={() => handleSocialAuth('Facebook')}
               style={{ backgroundColor: COLORS.card, border: `1px solid ${COLORS.border}`, color: COLORS.textMain, padding: '12px', borderRadius: '12px', fontSize: '14px', fontWeight: 'bold', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '8px', width: '100%', boxSizing: 'border-box' }}
             >
-              📘 Continuar con Facebook
+              Continuar con Facebook
             </button>
           </div>
 
