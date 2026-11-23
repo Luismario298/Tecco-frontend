@@ -1,13 +1,22 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { db } from './firebase';
-import { collection, getDocs, addDoc, query, where, serverTimestamp, doc, updateDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
+import {
+  collection,
+  getDocs,
+  addDoc,
+  query,
+  where,
+  serverTimestamp,
+  doc,
+  updateDoc,
+  deleteDoc,
+  onSnapshot
+} from 'firebase/firestore';
 import logoTecco from './logo.png';
 import RateService from './RateService';
 import UploadPortfolio from './UploadPortfolio';
 import WorkerProfile from './WorkerProfile';
 import MapScreen, { FullMapScreen } from './MapScreen';
-import WorkerRequestsPanel from './WorkerRequestsPanel';
-import RealtimeChat from './RealtimeChat';
 import { CloudinaryService } from './cloudinaryService';
 
 const COLORS = {
@@ -39,9 +48,15 @@ const FAQ_ITEMS = [
   },
   {
     pregunta: '¿Cómo me comunico con el técnico antes o durante el servicio?',
-    respuesta: 'Desde el perfil del especialista o desde el mapa de seguimiento, presiona "Chat" para abrir la conversación en tiempo real.'
+    respuesta: 'Desde el perfil del especialista o desde el mapa de seguimiento, presiona "Chat" para abrir la conversación en tiempo real, que también quedará guardada en la pestaña Mensajes.'
   }
 ];
+
+const construirSalaId = (emailA, emailB) => {
+  const a = (emailA || 'usuario').trim().toLowerCase();
+  const b = (emailB || 'especialista').trim().toLowerCase();
+  return [a, b].sort().join('__');
+};
 
 export default function App() {
   const [pantalla, setPantalla] = useState('loading');
@@ -53,10 +68,10 @@ export default function App() {
   const [currentUserDocId, setCurrentUserDocId] = useState(null);
   const [pantallaPendiente, setPantallaPendiente] = useState(null);
 
-  // Notificación visual integrada (Heurística 4 - reemplaza alert())
+  // Notificación visual integrada
   const [notificacion, setNotificacion] = useState(null);
 
-  // Estados de Autenticación y Registro + Validación inline (Heurística 9)
+  // Estados de Autenticación y Registro
   const [isLogin, setIsLogin] = useState(true);
   const [nombre, setNombre] = useState("");
   const [email, setEmail] = useState("");
@@ -90,12 +105,15 @@ export default function App() {
   const [modalFiltroAbierto, setModalFiltroAbierto] = useState(false);
   const [busquedaFiltro, setBusquedaFiltro] = useState('');
 
-  // Galería, Reseñas, Chat en Tiempo Real y Contador de Mensajes
+  // Galería, Reseñas y Chat en Tiempo Real
   const [galeriaPortafolio, setGaleriaPortafolio] = useState([]);
   const [cargandoGaleria, setCargandoGaleria] = useState(false);
   const [chatActivo, setChatActivo] = useState(false);
   const [chatSalaInfo, setChatSalaInfo] = useState(null);
-  const [mensajesEntrantesCount, setMensajesEntrantesCount] = useState(0);
+  const [mensajesSala, setMensajesSala] = useState([]);
+  const [todosLosMensajes, setTodosLosMensajes] = useState([]);
+  const [textoMensaje, setTextoMensaje] = useState('');
+  const [enviandoMensaje, setEnviandoMensaje] = useState(false);
 
   // Solicitud de Servicio y Seguimiento en Mapa
   const [detallesFallaCliente, setDetallesFallaCliente] = useState("");
@@ -105,7 +123,7 @@ export default function App() {
   const [ultimaSolicitudEnviada, setUltimaSolicitudEnviada] = useState(null);
   const [cancelandoSolicitud, setCancelandoSolicitud] = useState(false);
 
-  // Ayuda / FAQ (Heurística 10)
+  // Ayuda / FAQ
   const [faqAbierta, setFaqAbierta] = useState(null);
 
   const mostrarAviso = (mensaje, tipo = 'info') => {
@@ -129,6 +147,15 @@ export default function App() {
   };
 
   const route = { params: routeParams };
+
+  const esMismoTrabajador = (worker) => {
+    if (!worker) return false;
+    const correoActual = (email || '').trim().toLowerCase();
+    const correoWorker = (worker.email || '').trim().toLowerCase();
+    if (correoActual && correoWorker && correoActual === correoWorker) return true;
+    if (currentUserDocId && worker.id && currentUserDocId === worker.id) return true;
+    return false;
+  };
 
   useEffect(() => {
     const styleEl = document.createElement('style');
@@ -191,35 +218,83 @@ export default function App() {
     }
   }, [pantalla]);
 
-  // Escucha en tiempo real de mensajes para mostrar visibilidad del estado en la pestaña Mensajes
+  // Marcar colaborador inactivo al salir de la pestaña/aplicación
   useEffect(() => {
-    if (!isAuthenticated || !email) {
-      setMensajesEntrantesCount(0);
-      return;
-    }
+    const marcarInactivoAlSalir = () => {
+      if (isAuthenticated && route.params.role === 'trabajador' && currentUserDocId) {
+        updateDoc(doc(db, 'trabajadores', currentUserDocId), { disponible: false }).catch(() => {});
+      }
+    };
+    window.addEventListener('pagehide', marcarInactivoAlSalir);
+    window.addEventListener('beforeunload', marcarInactivoAlSalir);
+    return () => {
+      window.removeEventListener('pagehide', marcarInactivoAlSalir);
+      window.removeEventListener('beforeunload', marcarInactivoAlSalir);
+    };
+  }, [isAuthenticated, route.params.role, currentUserDocId]);
 
-    const emailUsuario = email.trim().toLowerCase();
+  // Sincronización en tiempo real de todos los mensajes para listar chats guardados
+  useEffect(() => {
     const unsubscribe = onSnapshot(
       collection(db, 'chats_mensajes'),
       (snapshot) => {
-        let contador = 0;
-        snapshot.docs.forEach((docItem) => {
-          const data = docItem.data();
-          const perteneceASala = typeof data.salaId === 'string' && data.salaId.includes(emailUsuario);
-          const esDeOtro = (data.remitenteEmail || '').toLowerCase() !== emailUsuario;
-          if (perteneceASala && esDeOtro) {
-            contador += 1;
-          }
+        const lista = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+        lista.sort((a, b) => {
+          const ta = a.createdAtMillis || (a.createdAt?.seconds ? a.createdAt.seconds * 1000 : 0);
+          const tb = b.createdAtMillis || (b.createdAt?.seconds ? b.createdAt.seconds * 1000 : 0);
+          return ta - tb;
         });
-        setMensajesEntrantesCount(contador);
+        setTodosLosMensajes(lista);
       },
       (error) => {
-        console.error("Error al observar mensajes:", error);
+        console.error("Error observando chats_mensajes:", error);
       }
     );
-
     return () => unsubscribe();
-  }, [isAuthenticated, email]);
+  }, []);
+
+  // Mensajes de la sala abierta en tiempo real
+  useEffect(() => {
+    if (!chatActivo || !chatSalaInfo?.salaId) {
+      setMensajesSala([]);
+      return;
+    }
+    const salaObjetivo = chatSalaInfo.salaId.toLowerCase();
+    const filtrados = todosLosMensajes.filter(
+      (m) => (m.salaId || '').toLowerCase() === salaObjetivo
+    );
+    setMensajesSala(filtrados);
+  }, [chatActivo, chatSalaInfo, todosLosMensajes]);
+
+  // Conversaciones guardadas del usuario actual
+  const conversacionesGuardadas = useMemo(() => {
+    const miCorreo = (email || '').trim().toLowerCase();
+    if (!miCorreo) return [];
+
+    const mapaSalas = new Map();
+    todosLosMensajes.forEach((msg) => {
+      const salaKey = (msg.salaId || '').toLowerCase();
+      if (!salaKey || !salaKey.includes(miCorreo)) return;
+
+      const esMio = (msg.remitenteEmail || '').toLowerCase() === miCorreo;
+      const contraparteCorreo = esMio
+        ? (msg.destinatarioEmail || salaKey.split('__').find(p => p !== miCorreo) || 'contacto')
+        : (msg.remitenteEmail || 'contacto');
+      const contraparteNombre = esMio
+        ? (msg.destinatarioNombre || contraparteCorreo)
+        : (msg.remitenteNombre || contraparteCorreo);
+
+      mapaSalas.set(salaKey, {
+        salaId: salaKey,
+        contraparteEmail: contraparteCorreo,
+        contraparteNombre,
+        ultimoTexto: msg.texto || '',
+        ultimoTiempo: msg.createdAtMillis || 0
+      });
+    });
+
+    return Array.from(mapaSalas.values()).sort((a, b) => b.ultimoTiempo - a.ultimoTiempo);
+  }, [todosLosMensajes, email]);
 
   const cargarDatosFirestore = async () => {
     setCargandoDatos(true);
@@ -244,7 +319,6 @@ export default function App() {
     cargarDatosFirestore();
   }, []);
 
-  // Conteo real de reseñas y promedio por especialista (Heurísticas 2 y 6)
   const obtenerEstadisticasResenas = (worker) => {
     if (!worker) return { total: 0, promedio: '5.0', lista: [] };
     const lista = calificaciones.filter(
@@ -358,8 +432,14 @@ export default function App() {
   };
 
   const irASolicitarServicio = (workerTarget = null) => {
-    if (workerTarget) {
-      setPerfilSeleccionado(workerTarget);
+    const objetivo = workerTarget || perfilSeleccionado;
+    if (objetivo) {
+      setPerfilSeleccionado(objetivo);
+    }
+
+    if (esMismoTrabajador(objetivo)) {
+      mostrarAviso('No puedes solicitar un servicio a tu propio perfil.', 'error');
+      return;
     }
 
     if (!isAuthenticated) {
@@ -373,29 +453,59 @@ export default function App() {
     setPantalla('SolicitarTrabajo');
   };
 
-  const abrirChatConEspecialista = (workerTarget = null) => {
+  const abrirChatConEspecialista = (workerTarget = null, salaDirecta = null) => {
     const objetivo = workerTarget || perfilSeleccionado;
     if (objetivo) {
       setPerfilSeleccionado(objetivo);
     }
 
     if (!isAuthenticated) {
-      mostrarAviso('Inicia sesión para iniciar una conversación con el especialista.', 'info');
+      mostrarAviso('Inicia sesión para iniciar una conversación.', 'info');
       setPantallaPendiente('AbrirChat');
       setIsLogin(true);
       navigation.navigate('Auth', { role: 'cliente', initialMode: 'login' });
       return;
     }
 
-    const clienteKey = (email || 'cliente').trim().toLowerCase();
-    const workerKey = (objetivo?.email || objetivo?.id || 'especialista').trim().toLowerCase();
-    const salaGenerada = `sala_${clienteKey}__${workerKey}`;
+    const miCorreo = (email || 'usuario').trim().toLowerCase();
+    const otroCorreo = (salaDirecta?.contraparteEmail || objetivo?.email || objetivo?.id || 'especialista').trim().toLowerCase();
+    const salaGenerada = salaDirecta?.salaId || construirSalaId(miCorreo, otroCorreo);
 
     setChatSalaInfo({
-      salaId: salaGenerada,
-      nombreContraparte: objetivo?.nombre || 'Especialista TECCO'
+      salaId: salaGenerada.toLowerCase(),
+      nombreContraparte: salaDirecta?.contraparteNombre || objetivo?.nombre || 'Especialista TECCO',
+      contraparteEmail: otroCorreo
     });
     setChatActivo(true);
+  };
+
+  const handleEnviarMensajeChat = async (e) => {
+    e.preventDefault();
+    if (!textoMensaje.trim() || !chatSalaInfo?.salaId || enviandoMensaje) return;
+
+    const miCorreo = (email || 'usuario').trim().toLowerCase();
+    const otroCorreo = (chatSalaInfo.contraparteEmail || '').trim().toLowerCase();
+
+    setEnviandoMensaje(true);
+    try {
+      await addDoc(collection(db, 'chats_mensajes'), {
+        salaId: chatSalaInfo.salaId.toLowerCase(),
+        texto: textoMensaje.trim(),
+        remitenteEmail: miCorreo,
+        remitenteNombre: nombre || miCorreo,
+        remitenteRol: route.params.role || 'cliente',
+        destinatarioEmail: otroCorreo,
+        destinatarioNombre: chatSalaInfo.nombreContraparte || otroCorreo,
+        createdAt: serverTimestamp(),
+        createdAtMillis: Date.now()
+      });
+      setTextoMensaje('');
+    } catch (error) {
+      console.error("Error al enviar mensaje:", error);
+      mostrarAviso('No se pudo enviar el mensaje.', 'error');
+    } finally {
+      setEnviandoMensaje(false);
+    }
   };
 
   const handleEnviarSolicitudTrabajo = async (e) => {
@@ -403,6 +513,12 @@ export default function App() {
     if (!isAuthenticated) {
       setPantallaPendiente('SolicitarTrabajo');
       setPantalla('Auth');
+      return;
+    }
+
+    const especialistaDestino = perfilSeleccionado;
+    if (esMismoTrabajador(especialistaDestino)) {
+      mostrarAviso('No puedes enviarte una solicitud a ti mismo.', 'error');
       return;
     }
 
@@ -418,12 +534,12 @@ export default function App() {
 
     setEnviandoSolicitud(true);
     try {
-      const especialistaDestino = perfilSeleccionado;
       const nuevaSolicitud = {
         trabajador_id: especialistaDestino?.id || '',
+        trabajador_email: (especialistaDestino?.email || '').trim().toLowerCase(),
         destinatario: especialistaDestino?.nombre || 'Especialista TECCO',
         oficio: especialistaDestino?.oficio || filtroOficio,
-        cliente_email: email || route.params.email,
+        cliente_email: (email || route.params.email || '').trim().toLowerCase(),
         cliente_nombre: nombre || 'Cliente TECCO',
         detalles_falla: detallesFallaCliente.trim(),
         direccion_exacta: direccionExactaCliente.trim(),
@@ -436,13 +552,30 @@ export default function App() {
 
       setUltimaSolicitudEnviada({ id: docRef.id, ...nuevaSolicitud });
       await cargarDatosFirestore();
-      mostrarAviso('Solicitud enviada. Ahora puedes dar seguimiento en el mapa.', 'success');
+      mostrarAviso('Solicitud guardada y enviada al especialista.', 'success');
       setPantalla('MapaSolicitud');
     } catch (error) {
       console.error("Error al enviar solicitud:", error);
-      mostrarAviso('No se pudo enviar la solicitud. Intenta de nuevo.', 'error');
+      mostrarAviso('No se pudo guardar la solicitud.', 'error');
     } finally {
       setEnviandoSolicitud(false);
+    }
+  };
+
+  const handleResponderSolicitudTrabajador = async (solicitudId, nuevoEstado) => {
+    try {
+      await updateDoc(doc(db, 'solicitudes_servicio', solicitudId), {
+        estado: nuevoEstado,
+        respondidoEn: new Date().toISOString()
+      });
+      await cargarDatosFirestore();
+      mostrarAviso(
+        nuevoEstado === 'Aceptada' ? 'Solicitud aceptada.' : 'Solicitud rechazada.',
+        nuevoEstado === 'Aceptada' ? 'success' : 'info'
+      );
+    } catch (error) {
+      console.error("Error al actualizar solicitud:", error);
+      mostrarAviso('No se pudo actualizar el estado de la solicitud.', 'error');
     }
   };
 
@@ -462,7 +595,7 @@ export default function App() {
       setNavTab('inicio');
     } catch (error) {
       console.error("Error al cancelar solicitud:", error);
-      mostrarAviso('No se pudo cancelar la solicitud. Intenta de nuevo.', 'error');
+      mostrarAviso('No se pudo cancelar la solicitud.', 'error');
     } finally {
       setCancelandoSolicitud(false);
     }
@@ -488,7 +621,7 @@ export default function App() {
         const horaActual = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         setUltimaActualizacionServicio(horaActual);
         await cargarDatosFirestore();
-        mostrarAviso(nuevoEstado ? 'Tu perfil ahora es visible para clientes.' : 'Tu perfil se ocultó del catálogo.', 'success');
+        mostrarAviso(nuevoEstado ? 'Estado cambiado a Activo.' : 'Estado cambiado a Inactivo.', 'success');
       } catch (error) {
         console.error("Error actualizando disponibilidad:", error);
         mostrarAviso('No se pudo actualizar el estado.', 'error');
@@ -599,12 +732,13 @@ export default function App() {
         setErroresAuth({});
 
         if (rolActual === 'trabajador') {
+          await updateDoc(doc(db, 'trabajadores', docSnap.id), { disponible: true });
           setOficio(userData.oficio || 'Aire acondicionado');
           setAnosExperiencia(userData.anosExperiencia || '3 años');
           setDescripcionServicio(userData.descripcion || '');
           setColonia(userData.colonia || 'Villas del Sol');
           setTelefono(userData.telefono || '');
-          setDisponible(userData.disponible !== undefined ? userData.disponible : true);
+          setDisponible(true);
           setFotosTrabajos(userData.fotosTrabajos || '');
         }
 
@@ -616,10 +750,11 @@ export default function App() {
           setPantallaPendiente(null);
           if (destino === 'AbrirChat') {
             setPantalla('DetallePerfil');
-            const workerKey = (perfilSeleccionado?.email || perfilSeleccionado?.id || 'especialista').trim().toLowerCase();
+            const otroCorreo = (perfilSeleccionado?.email || perfilSeleccionado?.id || 'especialista').trim().toLowerCase();
             setChatSalaInfo({
-              salaId: `sala_${emailLimpio}__${workerKey}`,
-              nombreContraparte: perfilSeleccionado?.nombre || 'Especialista TECCO'
+              salaId: construirSalaId(emailLimpio, otroCorreo),
+              nombreContraparte: perfilSeleccionado?.nombre || 'Especialista TECCO',
+              contraparteEmail: otroCorreo
             });
             setChatActivo(true);
           } else {
@@ -671,10 +806,11 @@ export default function App() {
             setPantallaPendiente(null);
             if (destino === 'AbrirChat') {
               setPantalla('DetallePerfil');
-              const workerKey = (perfilSeleccionado?.email || perfilSeleccionado?.id || 'especialista').trim().toLowerCase();
+              const otroCorreo = (perfilSeleccionado?.email || perfilSeleccionado?.id || 'especialista').trim().toLowerCase();
               setChatSalaInfo({
-                salaId: `sala_${emailLimpio}__${workerKey}`,
-                nombreContraparte: perfilSeleccionado?.nombre || 'Especialista TECCO'
+                salaId: construirSalaId(emailLimpio, otroCorreo),
+                nombreContraparte: perfilSeleccionado?.nombre || 'Especialista TECCO',
+                contraparteEmail: otroCorreo
               });
               setChatActivo(true);
             } else {
@@ -705,6 +841,10 @@ export default function App() {
 
       if (!querySnapshot.empty) {
         const docSnap = querySnapshot.docs[0];
+        if (rolActual === 'trabajador') {
+          await updateDoc(doc(db, 'trabajadores', docSnap.id), { disponible: true });
+          setDisponible(true);
+        }
         setCurrentUserDocId(docSnap.id);
         setNombre(dummyNombre);
         setEmail(dummyEmail);
@@ -736,10 +876,11 @@ export default function App() {
         setPantallaPendiente(null);
         if (destino === 'AbrirChat') {
           setPantalla('DetallePerfil');
-          const workerKey = (perfilSeleccionado?.email || perfilSeleccionado?.id || 'especialista').trim().toLowerCase();
+          const otroCorreo = (perfilSeleccionado?.email || perfilSeleccionado?.id || 'especialista').trim().toLowerCase();
           setChatSalaInfo({
-            salaId: `sala_${dummyEmail}__${workerKey}`,
-            nombreContraparte: perfilSeleccionado?.nombre || 'Especialista TECCO'
+            salaId: construirSalaId(dummyEmail, otroCorreo),
+            nombreContraparte: perfilSeleccionado?.nombre || 'Especialista TECCO',
+            contraparteEmail: otroCorreo
           });
           setChatActivo(true);
         } else {
@@ -782,8 +923,9 @@ export default function App() {
 
       setCurrentUserDocId(docRef.id);
       setEmail(emailFinal);
+      setDisponible(true);
       setIsAuthenticated(true);
-      mostrarAviso('Perfil profesional publicado correctamente.', 'success');
+      mostrarAviso('Perfil profesional publicado y activo.', 'success');
       await cargarDatosFirestore();
       setPantalla('Home');
       setNavTab('panel');
@@ -793,7 +935,15 @@ export default function App() {
     }
   };
 
-  const cerrarSesion = () => {
+  const cerrarSesion = async () => {
+    if (route.params.role === 'trabajador' && currentUserDocId) {
+      try {
+        await updateDoc(doc(db, 'trabajadores', currentUserDocId), { disponible: false });
+      } catch (e) {
+        console.error("Error al marcar inactivo al cerrar sesión:", e);
+      }
+    }
+    setDisponible(false);
     setIsAuthenticated(false);
     setCurrentUserDocId(null);
     setNombre("");
@@ -805,10 +955,10 @@ export default function App() {
     setChatActivo(false);
     setChatSalaInfo(null);
     setUltimaSolicitudEnviada(null);
-    setMensajesEntrantesCount(0);
     setRouteParams(prev => ({ ...prev, role: 'cliente' }));
     setNavTab('inicio');
-    mostrarAviso('Has cerrado sesión.', 'info');
+    await cargarDatosFirestore();
+    mostrarAviso('Sesión cerrada y estado actualizado.', 'info');
   };
 
   const renderToast = () => {
@@ -854,6 +1004,12 @@ export default function App() {
           <div onClick={() => { setPantalla('Home'); setNavTab('solicitudes'); }} style={{ textAlign: 'center', cursor: 'pointer', color: navTab === 'solicitudes' ? COLORS.accentWorker : COLORS.textSecondary }}>
             <div style={{ fontSize: '12px', fontWeight: 'bold' }}>Solicitudes</div>
           </div>
+          <div onClick={() => { setPantalla('Home'); setNavTab('mensajes'); }} style={{ textAlign: 'center', cursor: 'pointer', color: navTab === 'mensajes' ? COLORS.accentWorker : COLORS.textSecondary }}>
+            <div style={{ fontSize: '12px', fontWeight: 'bold' }}>Mensajes</div>
+          </div>
+          <div onClick={() => { setPantalla('Home'); setNavTab('cuenta'); }} style={{ textAlign: 'center', cursor: 'pointer', color: navTab === 'cuenta' ? COLORS.accentWorker : COLORS.textSecondary }}>
+            <div style={{ fontSize: '12px', fontWeight: 'bold' }}>Perfil</div>
+          </div>
         </div>
       );
     }
@@ -863,13 +1019,8 @@ export default function App() {
         <div onClick={() => { setPantalla('Home'); setNavTab('inicio'); setModalFiltroAbierto(false); }} style={{ textAlign: 'center', cursor: 'pointer', color: navTab === 'inicio' ? COLORS.primary : COLORS.textSecondary }}>
           <div style={{ fontSize: '12px', fontWeight: 'bold' }}>Inicio</div>
         </div>
-        <div onClick={() => { setPantalla('Home'); setNavTab('mensajes'); setModalFiltroAbierto(false); }} style={{ textAlign: 'center', cursor: 'pointer', color: navTab === 'mensajes' ? COLORS.primary : COLORS.textSecondary, position: 'relative', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-          <span style={{ fontSize: '12px', fontWeight: 'bold' }}>Mensajes</span>
-          {mensajesEntrantesCount > 0 && (
-            <span style={{ backgroundColor: COLORS.primary, color: '#000000', fontSize: '10px', fontWeight: 'bold', padding: '1px 6px', borderRadius: '999px' }}>
-              {mensajesEntrantesCount}
-            </span>
-          )}
+        <div onClick={() => { setPantalla('Home'); setNavTab('mensajes'); setModalFiltroAbierto(false); }} style={{ textAlign: 'center', cursor: 'pointer', color: navTab === 'mensajes' ? COLORS.primary : COLORS.textSecondary }}>
+          <div style={{ fontSize: '12px', fontWeight: 'bold' }}>Mensajes</div>
         </div>
         <div onClick={() => { setPantalla('Home'); setNavTab('cuenta'); setModalFiltroAbierto(false); }} style={{ textAlign: 'center', cursor: 'pointer', color: navTab === 'cuenta' ? COLORS.primary : COLORS.textSecondary }}>
           <div style={{ fontSize: '12px', fontWeight: 'bold' }}>Cuenta</div>
@@ -879,26 +1030,86 @@ export default function App() {
   };
 
   // =========================================================================
-  // CHAT EN TIEMPO REAL TIPO WHATSAPP (SUPERPUESTO SOBRE CUALQUIER PANTALLA)
+  // CHAT EN TIEMPO REAL DIRECTO (SINCRONIZADO CON chats_mensajes)
   // =========================================================================
   if (chatActivo) {
+    const miCorreo = (email || '').trim().toLowerCase();
     return (
-      <RealtimeChat
-        salaId={chatSalaInfo?.salaId || perfilSeleccionado?.id}
-        currentUserEmail={email || route.params.email}
-        currentUserRole={route.params.role}
-        currentUserName={nombre || route.params.nombre}
-        contraparteNombre={chatSalaInfo?.nombreContraparte || perfilSeleccionado?.nombre}
-        onClose={() => {
-          setChatActivo(false);
-          setChatSalaInfo(null);
-        }}
-      />
+      <div style={{ backgroundColor: COLORS.background, minHeight: '100vh', width: '100%', display: 'flex', flexDirection: 'column', fontFamily: 'Inter, sans-serif', color: COLORS.textMain }}>
+        {renderToast()}
+        <div style={{ backgroundColor: '#101B22', padding: '14px 16px', borderBottom: `1px solid ${COLORS.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <button
+              type="button"
+              onClick={() => { setChatActivo(false); setChatSalaInfo(null); }}
+              style={{ background: 'none', border: 'none', color: COLORS.primary, fontSize: '16px', fontWeight: 'bold', cursor: 'pointer' }}
+            >
+              ← Volver
+            </button>
+            <div>
+              <div style={{ fontSize: '15px', fontWeight: 'bold', color: COLORS.textMain }}>
+                {chatSalaInfo?.nombreContraparte || 'Conversación'}
+              </div>
+              <div style={{ fontSize: '11px', color: COLORS.textSecondary }}>
+                Chat guardado en tiempo real
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div style={{ flex: 1, padding: '16px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', maxWidth: '640px', width: '100%', margin: '0 auto' }}>
+          {mensajesSala.length === 0 ? (
+            <p style={{ textAlign: 'center', color: COLORS.textSecondary, fontSize: '13px', marginTop: '30px' }}>
+              Aún no hay mensajes en esta conversación. Escribe para comenzar.
+            </p>
+          ) : (
+            mensajesSala.map((msg) => {
+              const esMio = (msg.remitenteEmail || '').toLowerCase() === miCorreo;
+              return (
+                <div
+                  key={msg.id}
+                  style={{
+                    alignSelf: esMio ? 'flex-end' : 'flex-start',
+                    backgroundColor: esMio ? '#0B4F43' : COLORS.card,
+                    color: COLORS.textMain,
+                    border: `1px solid ${esMio ? COLORS.primary : COLORS.border}`,
+                    padding: '10px 14px',
+                    borderRadius: '14px',
+                    maxWidth: '78%'
+                  }}
+                >
+                  <div style={{ fontSize: '13px', lineHeight: '1.4' }}>{msg.texto}</div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        <form
+          onSubmit={handleEnviarMensajeChat}
+          style={{ backgroundColor: '#101B22', borderTop: `1px solid ${COLORS.border}`, padding: '12px 16px', display: 'flex', gap: '10px', maxWidth: '640px', width: '100%', margin: '0 auto' }}
+        >
+          <input
+            type="text"
+            placeholder="Escribe un mensaje..."
+            value={textoMensaje}
+            onChange={(e) => setTextoMensaje(e.target.value)}
+            style={{ flex: 1, padding: '12px 14px', borderRadius: '12px', border: `1px solid ${COLORS.border}`, backgroundColor: COLORS.card, color: COLORS.textMain, fontSize: '13px' }}
+          />
+          <button
+            type="submit"
+            disabled={enviandoMensaje}
+            style={{ backgroundColor: COLORS.primary, color: '#000000', border: 'none', padding: '0 18px', borderRadius: '12px', fontWeight: 'bold', fontSize: '13px', cursor: 'pointer' }}
+          >
+            Enviar
+          </button>
+        </form>
+      </div>
     );
   }
 
   // =========================================================================
-  // MAPA MOSTRADO DESPUÉS DE SOLICITAR UN SERVICIO (CON CONTROL DE CANCELAR/EDITAR)
+  // MAPA MOSTRADO DESPUÉS DE SOLICITAR UN SERVICIO
   // =========================================================================
   if (pantalla === 'MapaSolicitud') {
     const trabajadoresMapa = perfilSeleccionado ? [perfilSeleccionado] : trabajadores;
@@ -911,7 +1122,7 @@ export default function App() {
             <div>
               <h2 style={{ fontSize: '16px', margin: 0, color: COLORS.primary, fontWeight: 'bold' }}>Solicitud enviada · Seguimiento en mapa</h2>
               <p style={{ fontSize: '12px', color: COLORS.textSecondary, margin: '4px 0 0 0' }}>
-                {ultimaSolicitudEnviada?.destinatario || perfilSeleccionado?.nombre || 'Especialista'} · {ultimaSolicitudEnviada?.zona || zonaSolicitud}
+                {ultimaSolicitudEnviada?.destinatario || perfilSeleccionado?.nombre || 'Especialista'} · {ultimaSolicitudEnviada?.zona || zonaSolicitud} · Estado: {ultimaSolicitudEnviada?.estado || 'Pendiente'}
               </p>
               {ultimaSolicitudEnviada?.direccion_exacta && (
                 <p style={{ fontSize: '12px', color: '#CBD5E0', margin: '4px 0 0 0' }}>
@@ -967,10 +1178,16 @@ export default function App() {
   // =========================================================================
   if (pantalla === 'Home') {
     const esColaborador = route.params.role === 'trabajador' && isAuthenticated;
+    const miCorreoNormalizado = (email || '').trim().toLowerCase();
 
     // 1. VISTA EXCLUSIVA PARA COLABORADOR
     if (esColaborador) {
-      const misSolicitudes = solicitudes.filter(s => s.destinatario === nombre || !s.destinatario);
+      const misSolicitudes = solicitudes.filter((s) => {
+        const porCorreo = s.trabajador_email && s.trabajador_email.toLowerCase() === miCorreoNormalizado;
+        const porId = s.trabajador_id && currentUserDocId && s.trabajador_id === currentUserDocId;
+        const porNombre = s.destinatario && nombre && s.destinatario.toLowerCase() === nombre.trim().toLowerCase();
+        return porCorreo || porId || porNombre;
+      });
 
       return (
         <div style={{ backgroundColor: COLORS.background, minHeight: '100vh', width: '100%', padding: '16px 16px 80px 16px', fontFamily: 'Inter, sans-serif', color: COLORS.textMain, overflowY: 'auto' }}>
@@ -1016,19 +1233,23 @@ export default function App() {
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '20px' }}>
                   <div style={{ backgroundColor: COLORS.card, padding: '16px', borderRadius: '16px', border: `1px solid ${COLORS.border}` }}>
-                    <p style={{ fontSize: '12px', color: COLORS.textSecondary, margin: '0 0 4px 0' }}>Solicitudes Activas</p>
+                    <p style={{ fontSize: '12px', color: COLORS.textSecondary, margin: '0 0 4px 0' }}>Solicitudes Recibidas</p>
                     <h4 style={{ fontSize: '24px', margin: 0, color: COLORS.textMain }}>{misSolicitudes.length}</h4>
                   </div>
                   <div style={{ backgroundColor: COLORS.card, padding: '16px', borderRadius: '16px', border: `1px solid ${COLORS.border}` }}>
-                    <p style={{ fontSize: '12px', color: COLORS.textSecondary, margin: '0 0 4px 0' }}>Calificación</p>
-                    <h4 style={{ fontSize: '24px', margin: 0, color: '#E2B714' }}>5.0</h4>
+                    <p style={{ fontSize: '12px', color: COLORS.textSecondary, margin: '0 0 4px 0' }}>Estado actual</p>
+                    <h4 style={{ fontSize: '16px', margin: '4px 0 0 0', color: disponible ? COLORS.primary : COLORS.textSecondary }}>
+                      {disponible ? 'Activo' : 'Inactivo'}
+                    </h4>
                   </div>
                 </div>
 
                 <div style={{ backgroundColor: COLORS.card, borderRadius: '16px', padding: '18px', border: `1px solid ${COLORS.border}`, marginBottom: '16px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
                     <span style={{ fontSize: '12px', fontWeight: 'bold', color: COLORS.accentWorker }}>TU ANUNCIO ACTIVO</span>
-                    <span style={{ fontSize: '12px', fontWeight: 'bold', color: COLORS.primary }}>{disponible ? 'Disponible' : 'No disponible'}</span>
+                    <span style={{ fontSize: '12px', fontWeight: 'bold', color: disponible ? COLORS.primary : COLORS.textSecondary }}>
+                      {disponible ? 'Activo' : 'Inactivo'}
+                    </span>
                   </div>
                   <h3 style={{ fontSize: '17px', margin: '0 0 4px 0', color: COLORS.textMain }}>{oficio}</h3>
                   <p style={{ fontSize: '12px', color: COLORS.textSecondary, margin: '0 0 12px 0' }}>Zona base: {colonia} · Exp: {anosExperiencia}</p>
@@ -1145,15 +1366,119 @@ export default function App() {
             )}
 
             {navTab === 'solicitudes' && (
-              <WorkerRequestsPanel 
-                workerEmail={email}
-                workerName={nombre}
-                onBack={() => setNavTab('panel')}
-                onOpenChat={(infoSala) => {
-                  setChatSalaInfo(infoSala);
-                  setChatActivo(true);
-                }}
-              />
+              <div>
+                <h2 style={{ fontSize: '18px', fontWeight: 'bold', color: COLORS.accentWorker, margin: '0 0 14px 0' }}>Solicitudes de Servicio</h2>
+                {misSolicitudes.length === 0 ? (
+                  <div style={{ backgroundColor: COLORS.card, padding: '20px', borderRadius: '16px', border: `1px solid ${COLORS.border}`, textAlign: 'center' }}>
+                    <p style={{ color: COLORS.textSecondary, fontSize: '13px', margin: 0 }}>No tienes solicitudes de servicio por el momento.</p>
+                  </div>
+                ) : (
+                  misSolicitudes.map((sol) => {
+                    const estadoActual = sol.estado || 'Pendiente';
+                    return (
+                      <div key={sol.id} style={{ backgroundColor: COLORS.card, borderRadius: '16px', padding: '16px', marginBottom: '12px', border: `1px solid ${COLORS.border}` }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px', gap: '8px' }}>
+                          <strong style={{ fontSize: '14px', color: COLORS.textMain }}>{sol.cliente_nombre || sol.cliente_email || 'Cliente'}</strong>
+                          <span style={{ fontSize: '11px', fontWeight: 'bold', color: estadoActual === 'Aceptada' ? COLORS.primary : estadoActual === 'Rechazada' ? COLORS.error : COLORS.accentWorker }}>
+                            {estadoActual}
+                          </span>
+                        </div>
+                        <p style={{ fontSize: '13px', color: '#CBD5E0', margin: '0 0 6px 0' }}>{sol.detalles_falla}</p>
+                        <p style={{ fontSize: '12px', color: COLORS.textSecondary, margin: '0 0 12px 0' }}>
+                          Zona: {sol.zona || 'Centro'} · Domicilio: {sol.direccion_exacta || 'No especificado'}
+                        </p>
+                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                          <button
+                            type="button"
+                            onClick={() => handleResponderSolicitudTrabajador(sol.id, 'Aceptada')}
+                            style={{ flex: 1, backgroundColor: COLORS.primary, color: '#000', border: 'none', padding: '10px', borderRadius: '10px', fontWeight: 'bold', fontSize: '12px', cursor: 'pointer' }}
+                          >
+                            Aceptar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleResponderSolicitudTrabajador(sol.id, 'Rechazada')}
+                            style={{ flex: 1, backgroundColor: '#2D1A1E', color: COLORS.error, border: '1px solid #742A2A', padding: '10px', borderRadius: '10px', fontWeight: 'bold', fontSize: '12px', cursor: 'pointer' }}
+                          >
+                            No aceptar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => abrirChatConEspecialista(null, { salaId: construirSalaId(miCorreoNormalizado, sol.cliente_email), contraparteEmail: sol.cliente_email, contraparteNombre: sol.cliente_nombre || sol.cliente_email })}
+                            style={{ backgroundColor: '#1E2D38', color: COLORS.textMain, border: `1px solid ${COLORS.border}`, padding: '10px 12px', borderRadius: '10px', fontWeight: 'bold', fontSize: '12px', cursor: 'pointer' }}
+                          >
+                            Chat
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            )}
+
+            {navTab === 'mensajes' && (
+              <div>
+                <h2 style={{ fontSize: '18px', fontWeight: 'bold', color: COLORS.accentWorker, margin: '0 0 14px 0' }}>Chats Guardados</h2>
+                {conversacionesGuardadas.length === 0 ? (
+                  <div style={{ backgroundColor: COLORS.card, padding: '20px', borderRadius: '16px', border: `1px solid ${COLORS.border}`, textAlign: 'center' }}>
+                    <p style={{ color: COLORS.textSecondary, fontSize: '13px', margin: 0 }}>Aún no tienes conversaciones guardadas con clientes.</p>
+                  </div>
+                ) : (
+                  conversacionesGuardadas.map((conv) => (
+                    <div
+                      key={conv.salaId}
+                      onClick={() => abrirChatConEspecialista(null, conv)}
+                      style={{ backgroundColor: COLORS.card, borderRadius: '14px', padding: '14px 16px', marginBottom: '10px', border: `1px solid ${COLORS.border}`, cursor: 'pointer' }}
+                    >
+                      <div style={{ fontSize: '14px', fontWeight: 'bold', color: COLORS.textMain }}>{conv.contraparteNombre}</div>
+                      <div style={{ fontSize: '12px', color: COLORS.textSecondary, marginTop: '4px' }}>{conv.ultimoTexto}</div>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+
+            {navTab === 'cuenta' && (
+              <div>
+                <h2 style={{ fontSize: '20px', fontWeight: 'bold', color: COLORS.accentWorker, marginBottom: '16px' }}>Perfil y Soporte</h2>
+                <div style={{ backgroundColor: COLORS.card, borderRadius: '16px', padding: '18px', border: `1px solid ${COLORS.border}`, marginBottom: '16px' }}>
+                  <p style={{ fontSize: '15px', fontWeight: 'bold', color: COLORS.textMain, margin: '0 0 4px 0' }}>{nombre || 'Especialista TECCO'}</p>
+                  <p style={{ fontSize: '12px', color: COLORS.textSecondary, margin: '0 0 8px 0' }}>{email} · Estado: {disponible ? 'Activo' : 'Inactivo'}</p>
+                  <button 
+                    onClick={cerrarSesion}
+                    style={{ backgroundColor: '#2D1A1E', color: COLORS.error, border: '1px solid #742A2A', width: '100%', padding: '12px', borderRadius: '12px', fontWeight: 'bold', fontSize: '14px', cursor: 'pointer' }}
+                  >
+                    Cerrar sesión
+                  </button>
+                </div>
+
+                <div style={{ backgroundColor: COLORS.card, borderRadius: '16px', padding: '18px', border: `1px solid ${COLORS.border}` }}>
+                  <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: COLORS.textMain, margin: '0 0 12px 0' }}>Soporte y preguntas frecuentes</h3>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {FAQ_ITEMS.map((item, idx) => {
+                      const abierta = faqAbierta === idx;
+                      return (
+                        <div
+                          key={idx}
+                          onClick={() => setFaqAbierta(abierta ? null : idx)}
+                          style={{ backgroundColor: COLORS.background, borderRadius: '10px', padding: '12px', border: `1px solid ${COLORS.border}`, cursor: 'pointer' }}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                            <span style={{ fontSize: '13px', fontWeight: 'bold', color: COLORS.textMain }}>{item.pregunta}</span>
+                            <span style={{ fontSize: '12px', color: COLORS.accentWorker, fontWeight: 'bold' }}>{abierta ? '−' : '+'}</span>
+                          </div>
+                          {abierta && (
+                            <p style={{ fontSize: '12px', color: COLORS.textSecondary, margin: '8px 0 0 0', lineHeight: '1.45' }}>
+                              {item.respuesta}
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
             )}
 
           </div>
@@ -1191,8 +1516,7 @@ export default function App() {
               </div>
               <h2 style={{ fontSize: '22px', fontWeight: 'bold', color: COLORS.textMain, margin: '0 0 12px 0' }}>¿Qué necesitas arreglar?</h2>
 
-              {/* Búsqueda directa por nombre, oficio o colonia (Heurística 7) */}
-              <div style={{ marginBottom: '12px', position: 'relative' }}>
+              <div style={{ marginBottom: '12px' }}>
                 <input
                   type="text"
                   placeholder="Buscar especialista por nombre, oficio o colonia..."
@@ -1210,7 +1534,6 @@ export default function App() {
                 />
               </div>
 
-              {/* Barra de filtro que abre el modal estilo Mercado Libre */}
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', marginBottom: '18px', flexWrap: 'wrap' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <button
@@ -1267,7 +1590,6 @@ export default function App() {
                 </button>
               </div>
 
-              {/* MODAL CENTRADO ESTILO MERCADO LIBRE */}
               {modalFiltroAbierto && (
                 <div
                   onClick={() => setModalFiltroAbierto(false)}
@@ -1403,7 +1725,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* Lista de especialistas */}
               <div>
                 {cargandoDatos ? (
                   <p style={{ textAlign: 'center', color: COLORS.textSecondary, padding: '30px' }}>Cargando especialistas...</p>
@@ -1456,10 +1777,10 @@ export default function App() {
 
           {navTab === 'mensajes' && (
             <div>
-              <h2 style={{ fontSize: '20px', fontWeight: 'bold', color: COLORS.textMain, marginBottom: '16px' }}>Mensajes y Solicitudes</h2>
+              <h2 style={{ fontSize: '20px', fontWeight: 'bold', color: COLORS.textMain, marginBottom: '16px' }}>Chats Guardados</h2>
               {!isAuthenticated ? (
                 <div style={{ backgroundColor: COLORS.card, padding: '20px', borderRadius: '16px', border: `1px solid ${COLORS.border}`, textAlign: 'center' }}>
-                  <p style={{ color: COLORS.textSecondary, fontSize: '13px', marginBottom: '12px' }}>Inicia sesión para ver tus mensajes y solicitudes.</p>
+                  <p style={{ color: COLORS.textSecondary, fontSize: '13px', marginBottom: '12px' }}>Inicia sesión para ver tus chats guardados.</p>
                   <button 
                     onClick={() => navigation.navigate('Auth', { role: 'cliente', initialMode: 'login' })}
                     style={{ backgroundColor: COLORS.primary, color: '#000', border: 'none', padding: '12px 20px', borderRadius: '10px', fontWeight: 'bold', cursor: 'pointer' }}
@@ -1467,20 +1788,23 @@ export default function App() {
                     Iniciar sesión
                   </button>
                 </div>
-              ) : (
+              ) : conversacionesGuardadas.length === 0 ? (
                 <div style={{ backgroundColor: COLORS.card, padding: '20px', borderRadius: '16px', border: `1px solid ${COLORS.border}`, textAlign: 'center' }}>
-                  <p style={{ color: COLORS.textSecondary, fontSize: '13px' }}>
-                    {mensajesEntrantesCount > 0
-                      ? `Tienes ${mensajesEntrantesCount} mensaje(s) recibido(s) en tus conversaciones.`
-                      : 'Tus chats activos en tiempo real.'}
+                  <p style={{ color: COLORS.textSecondary, fontSize: '13px', margin: 0 }}>
+                    Aún no tienes chats guardados. Entra al perfil de un especialista y presiona "Chat".
                   </p>
-                  <button 
-                    onClick={() => { setChatSalaInfo({ salaId: `sala_${(email || 'cliente').trim().toLowerCase()}__soporte`, nombreContraparte: 'Soporte TECCO' }); setChatActivo(true); }}
-                    style={{ backgroundColor: COLORS.primary, color: '#000', border: 'none', padding: '10px 16px', borderRadius: '10px', fontWeight: 'bold', cursor: 'pointer', marginTop: '10px' }}
-                  >
-                    Abrir Chat Directo
-                  </button>
                 </div>
+              ) : (
+                conversacionesGuardadas.map((conv) => (
+                  <div
+                    key={conv.salaId}
+                    onClick={() => abrirChatConEspecialista(null, conv)}
+                    style={{ backgroundColor: COLORS.card, borderRadius: '14px', padding: '14px 16px', marginBottom: '10px', border: `1px solid ${COLORS.border}`, cursor: 'pointer' }}
+                  >
+                    <div style={{ fontSize: '14px', fontWeight: 'bold', color: COLORS.textMain }}>{conv.contraparteNombre}</div>
+                    <div style={{ fontSize: '12px', color: COLORS.textSecondary, marginTop: '4px' }}>{conv.ultimoTexto}</div>
+                  </div>
+                ))
               )}
             </div>
           )}
@@ -1522,9 +1846,8 @@ export default function App() {
                 </button>
               </div>
 
-              {/* Heurística 10: Ayuda y preguntas frecuentes */}
               <div style={{ backgroundColor: COLORS.card, borderRadius: '16px', padding: '18px', border: `1px solid ${COLORS.border}` }}>
-                <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: COLORS.textMain, margin: '0 0 12px 0' }}>Ayuda y preguntas frecuentes</h3>
+                <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: COLORS.textMain, margin: '0 0 12px 0' }}>Soporte y preguntas frecuentes</h3>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                   {FAQ_ITEMS.map((item, idx) => {
                     const abierta = faqAbierta === idx;
@@ -1670,6 +1993,8 @@ export default function App() {
 
   if (pantalla === 'DetallePerfil' && perfilSeleccionado) {
     const statsPerfil = obtenerEstadisticasResenas(perfilSeleccionado);
+    const esPropioPerfil = esMismoTrabajador(perfilSeleccionado);
+
     return (
       <div style={{ backgroundColor: COLORS.background, minHeight: '100vh', width: '100%', paddingBottom: '40px', fontFamily: 'Inter, sans-serif', color: COLORS.textMain, overflowY: 'auto' }}>
         {renderToast()}
@@ -1690,14 +2015,19 @@ export default function App() {
               "{obtenerDetallePorOficio(perfilSeleccionado)}"
             </p>
 
-            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-              <button onClick={() => irASolicitarServicio(perfilSeleccionado)} style={{ flex: 1, minWidth: '140px', backgroundColor: COLORS.primary, color: '#000000', border: 'none', padding: '14px', borderRadius: '12px', fontSize: '14px', fontWeight: 'bold', cursor: 'pointer' }}>Solicitar Servicio</button>
-              <button onClick={() => abrirChatConEspecialista(perfilSeleccionado)} style={{ flex: 1, minWidth: '100px', backgroundColor: '#222D37', color: COLORS.textMain, border: 'none', padding: '14px', borderRadius: '12px', fontSize: '14px', fontWeight: 'bold', cursor: 'pointer' }}>Chat</button>
-              <button onClick={() => setPantalla('RateService')} style={{ width: '100%', backgroundColor: 'transparent', color: '#E2B714', border: `1px solid ${COLORS.border}`, padding: '11px', borderRadius: '12px', fontSize: '13px', fontWeight: 'bold', cursor: 'pointer' }}>Calificar servicio</button>
-            </div>
+            {esPropioPerfil ? (
+              <p style={{ fontSize: '12px', color: COLORS.textSecondary, textAlign: 'center', margin: 0 }}>
+                Este es tu perfil profesional. No puedes solicitarte un servicio ni calificarte a ti mismo.
+              </p>
+            ) : (
+              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                <button onClick={() => irASolicitarServicio(perfilSeleccionado)} style={{ flex: 1, minWidth: '140px', backgroundColor: COLORS.primary, color: '#000000', border: 'none', padding: '14px', borderRadius: '12px', fontSize: '14px', fontWeight: 'bold', cursor: 'pointer' }}>Solicitar Servicio</button>
+                <button onClick={() => abrirChatConEspecialista(perfilSeleccionado)} style={{ flex: 1, minWidth: '100px', backgroundColor: '#222D37', color: COLORS.textMain, border: 'none', padding: '14px', borderRadius: '12px', fontSize: '14px', fontWeight: 'bold', cursor: 'pointer' }}>Chat</button>
+                <button onClick={() => setPantalla('RateService')} style={{ width: '100%', backgroundColor: 'transparent', color: '#E2B714', border: `1px solid ${COLORS.border}`, padding: '11px', borderRadius: '12px', fontSize: '13px', fontWeight: 'bold', cursor: 'pointer' }}>Calificar servicio</button>
+              </div>
+            )}
           </div>
 
-          {/* Galería de trabajos previos */}
           <div style={{ padding: '0 16px', marginBottom: '22px' }}>
             <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: COLORS.textMain, marginBottom: '12px' }}>Galería de Trabajos Previos</h3>
             
@@ -1721,7 +2051,6 @@ export default function App() {
             )}
           </div>
 
-          {/* Heurística 6: Reseñas verificadas visibles en el perfil */}
           <div style={{ padding: '0 16px' }}>
             <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: COLORS.textMain, marginBottom: '12px' }}>
               Reseñas de clientes ({statsPerfil.total})
