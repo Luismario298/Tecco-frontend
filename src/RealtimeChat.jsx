@@ -1,193 +1,323 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { db } from './firebase';
-import { collection, addDoc, query, where, orderBy, onSnapshot, serverTimestamp } from 'firebase/firestore';
+import { collection, addDoc, query, where, onSnapshot, serverTimestamp } from 'firebase/firestore';
 
-export default function RealtimeChat({ 
-  salaId, 
-  currentUserRole, 
-  currentUserName, 
-  contraparteNombre, 
-  onClose 
+const COLORS = {
+  primary: '#00A887',
+  bubbleMine: '#005C4B',
+  bubbleOther: '#1F2C34',
+  headerBg: '#16222D',
+  chatBg: '#0B131A',
+  inputBg: '#1E2A38',
+  textMain: '#FFFFFF',
+  textSecondary: '#8696A0',
+  border: '#222D37'
+};
+
+export default function RealtimeChat({
+  salaId,
+  currentUserEmail,
+  currentUserRole,
+  currentUserName,
+  contraparteNombre,
+  onClose
 }) {
   const [mensajes, setMensajes] = useState([]);
   const [nuevoMensaje, setNuevoMensaje] = useState('');
-  const [cotizacionMonto, setCotizacionMonto] = useState('');
-  const [mostrarCotizador, setMostrarCotizador] = useState(false);
+  const [enviando, setEnviando] = useState(false);
+  const [cargando, setCargando] = useState(true);
   const mensajesEndRef = useRef(null);
 
-  // Identificador único de la sala (si no viene un ID de solicitud, usa uno general entre ambos)
-  const chatRoomId = salaId || `sala_${contraparteNombre || 'general'}`.replace(/\s+/g, '_');
+  const salaActiva = salaId || 'sala_general_tecco';
+  const miIdentificador = (currentUserEmail || currentUserName || 'usuario_tecco').trim().toLowerCase();
 
+  // Escucha en tiempo real de los mensajes de esta sala en Firebase Firestore
   useEffect(() => {
+    setCargando(true);
     const q = query(
-      collection(db, 'mensajes_chat'),
-      where('salaId', '==', chatRoomId),
-      orderBy('timestamp', 'asc')
+      collection(db, 'chats_mensajes'),
+      where('salaId', '==', salaActiva)
     );
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const listaMensajes = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      setMensajes(listaMensajes);
-    }, (error) => {
-      console.error("Error en tiempo real del chat:", error);
-    });
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const lista = snapshot.docs.map((docItem) => ({
+          id: docItem.id,
+          ...docItem.data()
+        }));
+
+        // Ordenar cronológicamente en cliente para evitar problemas de índices compuestos
+        lista.sort((a, b) => {
+          const tiempoA = a.createdAtMs || (a.timestamp?.toMillis ? a.timestamp.toMillis() : 0);
+          const tiempoB = b.createdAtMs || (b.timestamp?.toMillis ? b.timestamp.toMillis() : 0);
+          return tiempoA - tiempoB;
+        });
+
+        setMensajes(lista);
+        setCargando(false);
+      },
+      (error) => {
+        console.error('Error escuchando mensajes en tiempo real:', error);
+        setCargando(false);
+      }
+    );
 
     return () => unsubscribe();
-  }, [chatRoomId]);
+  }, [salaActiva]);
 
+  // Desplazamiento automático hacia el último mensaje
   useEffect(() => {
-    mensajesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (mensajesEndRef.current) {
+      mensajesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
   }, [mensajes]);
 
   const handleEnviarMensaje = async (e) => {
     e.preventDefault();
-    if (!nuevoMensaje.trim()) return;
+    const textoLimpio = nuevoMensaje.trim();
+    if (!textoLimpio || enviando) return;
 
-    const textoAEnviar = nuevoMensaje;
+    setEnviando(true);
     setNuevoMensaje('');
 
     try {
-      await addDoc(collection(db, 'mensajes_chat'), {
-        salaId: chatRoomId,
+      await addDoc(collection(db, 'chats_mensajes'), {
+        salaId: salaActiva,
+        texto: textoLimpio,
+        remitenteEmail: miIdentificador,
+        remitenteNombre: currentUserName || 'Usuario',
         remitenteRol: currentUserRole || 'cliente',
-        remitenteNombre: currentUserName || (currentUserRole === 'trabajador' ? 'Especialista' : 'Cliente'),
-        texto: textoAEnviar,
-        tipo: 'texto',
+        createdAtMs: Date.now(),
         timestamp: serverTimestamp()
       });
     } catch (error) {
-      console.error("Error al enviar mensaje:", error);
+      console.error('Error al enviar mensaje:', error);
+      setNuevoMensaje(textoLimpio);
+      alert('No se pudo enviar el mensaje. Intenta de nuevo.');
+    } finally {
+      setEnviando(false);
     }
   };
 
-  const handleEnviarCotizacion = async (e) => {
-    e.preventDefault();
-    if (!cotizacionMonto.trim()) return;
-
-    const monto = cotizacionMonto;
-    setCotizacionMonto('');
-    setMostrarCotizador(false);
-
+  const formatearHora = (msg) => {
     try {
-      await addDoc(collection(db, 'mensajes_chat'), {
-        salaId: chatRoomId,
-        remitenteRol: currentUserRole || 'trabajador',
-        remitenteNombre: currentUserName || 'Especialista',
-        texto: `💲 Propuesta de Cotización Formal: $${monto} MXN`,
-        tipo: 'cotizacion',
-        timestamp: serverTimestamp()
-      });
-    } catch (error) {
-      console.error("Error al enviar cotización:", error);
+      const dateObj = msg.timestamp?.toDate
+        ? msg.timestamp.toDate()
+        : msg.createdAtMs
+        ? new Date(msg.createdAtMs)
+        : new Date();
+      return dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } catch {
+      return '';
     }
   };
 
   return (
-    <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.65)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1200, padding: '16px', fontFamily: 'Inter, Poppins, sans-serif' }}>
-      <div style={{ backgroundColor: '#FFFFFF', borderRadius: '20px', maxWidth: '480px', width: '100%', height: '85vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 10px 30px rgba(0,0,0,0.2)' }}>
-        
-        {/* Cabecera del Chat */}
-        <div style={{ backgroundColor: '#00A887', color: '#FFFFFF', padding: '14px 18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div>
-            <h3 style={{ fontSize: '15px', margin: 0, fontWeight: '700' }}>💬 {contraparteNombre || 'Chat en Vivo'}</h3>
-            <p style={{ fontSize: '11px', margin: '2px 0 0 0', opacity: 0.9 }}>🟢 En línea · Canal Directo TECCO</p>
+    <div
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: COLORS.chatBg,
+        zIndex: 3000,
+        display: 'flex',
+        flexDirection: 'column',
+        fontFamily: 'Inter, sans-serif',
+        color: COLORS.textMain
+      }}
+    >
+      {/* Cabecera estilo WhatsApp */}
+      <div
+        style={{
+          backgroundColor: COLORS.headerBg,
+          padding: '12px 16px',
+          borderBottom: `1px solid ${COLORS.border}`,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          maxWidth: '680px',
+          width: '100%',
+          margin: '0 auto',
+          boxSizing: 'border-box'
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: COLORS.primary,
+              fontSize: '18px',
+              fontWeight: 'bold',
+              cursor: 'pointer',
+              padding: '4px 8px'
+            }}
+          >
+            ←
+          </button>
+
+          <div
+            style={{
+              width: '38px',
+              height: '38px',
+              borderRadius: '50%',
+              backgroundColor: '#1E2D38',
+              color: COLORS.primary,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontWeight: 'bold',
+              fontSize: '15px'
+            }}
+          >
+            {(contraparteNombre || 'E').charAt(0).toUpperCase()}
           </div>
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            <button 
-              type="button"
-              onClick={() => setMostrarCotizador(!mostrarCotizador)}
-              style={{ backgroundColor: 'rgba(255,255,255,0.2)', border: 'none', color: '#FFF', padding: '6px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: 'bold', cursor: 'pointer' }}
-            >
-              💲 Cotizar
-            </button>
-            <button 
-              onClick={onClose} 
-              style={{ backgroundColor: 'rgba(0,0,0,0.2)', border: 'none', color: '#FFF', width: '30px', height: '30px', borderRadius: '50%', fontSize: '14px', fontWeight: 'bold', cursor: 'pointer' }}
-            >
-              ✕
-            </button>
+
+          <div>
+            <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 'bold', color: COLORS.textMain }}>
+              {contraparteNombre || 'Especialista TECCO'}
+            </h3>
+            <p style={{ margin: 0, fontSize: '11px', color: COLORS.primary }}>
+              En línea · Chat en tiempo real
+            </p>
           </div>
         </div>
+      </div>
 
-        {/* Barra desplegable de Cotización Rápida */}
-        {mostrarCotizador && (
-          <form onSubmit={handleEnviarCotizacion} style={{ backgroundColor: '#E6F6F3', padding: '10px 16px', display: 'flex', gap: '8px', borderBottom: '1px solid #B2F5EA' }}>
-            <input 
-              type="number" 
-              placeholder="Monto en MXN (ej. 450)" 
-              value={cotizacionMonto}
-              onChange={(e) => setCotizacionMonto(e.target.value)}
-              style={{ flex: 1, padding: '8px 12px', borderRadius: '8px', border: '1px solid #00A887', fontSize: '13px' }}
-              required
-            />
-            <button type="submit" style={{ backgroundColor: '#00A887', color: '#FFF', border: 'none', padding: '8px 14px', borderRadius: '8px', fontWeight: 'bold', fontSize: '12px', cursor: 'pointer' }}>
-              Enviar Precio
-            </button>
-          </form>
-        )}
-
-        {/* Área de Mensajes */}
-        <div style={{ flex: 1, padding: '16px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', backgroundColor: '#F8F9FA' }}>
-          <div style={{ textAlign: 'center', fontSize: '11px', color: '#718096', backgroundColor: '#EDF2F7', padding: '6px 12px', borderRadius: '12px', alignSelf: 'center', marginBottom: '6px' }}>
-            🔒 Conversación protegida y sincronizada en tiempo real.
-          </div>
-
-          {mensajes.length === 0 ? (
-            <p style={{ textAlign: 'center', color: '#A0AEC0', fontSize: '13px', marginTop: '40px' }}>
-              Aún no hay mensajes. Escribe para iniciar la negociación...
+      {/* Área de mensajes con desplazamiento táctil y con flechas */}
+      <div
+        style={{
+          flex: 1,
+          overflowY: 'auto',
+          padding: '16px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '8px',
+          maxWidth: '680px',
+          width: '100%',
+          margin: '0 auto',
+          boxSizing: 'border-box',
+          touchAction: 'pan-y'
+        }}
+      >
+        {cargando ? (
+          <p style={{ textAlign: 'center', color: COLORS.textSecondary, fontSize: '13px', marginTop: '20px' }}>
+            Conectando conversación...
+          </p>
+        ) : mensajes.length === 0 ? (
+          <div
+            style={{
+              alignSelf: 'center',
+              backgroundColor: COLORS.headerBg,
+              padding: '10px 16px',
+              borderRadius: '10px',
+              border: `1px solid ${COLORS.border}`,
+              marginTop: '12px',
+              textAlign: 'center'
+            }}
+          >
+            <p style={{ margin: 0, fontSize: '12px', color: COLORS.textSecondary }}>
+              Inicia la conversación con {contraparteNombre || 'el especialista'} para coordinar el servicio.
             </p>
-          ) : (
-            mensajes.map((msg) => {
-              const esMio = msg.remitenteRol === currentUserRole;
-              const esCotizacion = msg.tipo === 'cotizacion';
+          </div>
+        ) : (
+          mensajes.map((msg) => {
+            const esMio =
+              msg.remitenteEmail === miIdentificador ||
+              (msg.remitenteRol === currentUserRole && msg.remitenteNombre === currentUserName);
 
-              return (
-                <div 
-                  key={msg.id} 
-                  style={{ 
-                    alignSelf: esMio ? 'flex-end' : 'flex-start',
-                    backgroundColor: esCotizacion ? '#FEFCBF' : (esMio ? '#00A887' : '#FFFFFF'),
-                    color: esCotizacion ? '#744210' : (esMio ? '#FFFFFF' : '#2D3748'),
-                    border: esCotizacion ? '1px solid #F6E05E' : (esMio ? 'none' : '1px solid #EDF2F7'),
-                    padding: '10px 14px',
-                    borderRadius: '14px',
-                    maxWidth: '78%',
-                    fontSize: '13px',
-                    boxShadow: '0 1px 3px rgba(0,0,0,0.05)'
+            return (
+              <div
+                key={msg.id}
+                style={{
+                  alignSelf: esMio ? 'flex-end' : 'flex-start',
+                  maxWidth: '78%',
+                  backgroundColor: esMio ? COLORS.bubbleMine : COLORS.bubbleOther,
+                  padding: '9px 12px',
+                  borderRadius: esMio ? '14px 14px 2px 14px' : '14px 14px 14px 2px',
+                  boxShadow: '0 1px 2px rgba(0, 0, 0, 0.35)',
+                  wordBreak: 'break-word'
+                }}
+              >
+                {!esMio && (
+                  <div style={{ fontSize: '11px', fontWeight: 'bold', color: COLORS.primary, marginBottom: '2px' }}>
+                    {msg.remitenteNombre || contraparteNombre}
+                  </div>
+                )}
+                <div style={{ fontSize: '14px', lineHeight: '1.4', color: COLORS.textMain }}>
+                  {msg.texto}
+                </div>
+                <div
+                  style={{
+                    fontSize: '10px',
+                    color: 'rgba(255, 255, 255, 0.65)',
+                    textAlign: 'right',
+                    marginTop: '4px'
                   }}
                 >
-                  <div style={{ fontSize: '10px', fontWeight: 'bold', opacity: 0.75, marginBottom: '3px' }}>
-                    {esMio ? 'Tú' : msg.remitenteNombre}
-                  </div>
-                  <div style={{ fontWeight: esCotizacion ? 'bold' : 'normal' }}>{msg.texto}</div>
+                  {formatearHora(msg)}
                 </div>
-              );
-            })
-          )}
-          <div ref={mensajesEndRef} />
-        </div>
-
-        {/* Formulario de Envío */}
-        <form onSubmit={handleEnviarMensaje} style={{ padding: '12px 16px', backgroundColor: '#FFFFFF', borderTop: '1px solid #EDF2F7', display: 'flex', gap: '8px' }}>
-          <input 
-            type="text" 
-            placeholder="Escribe un mensaje..." 
-            value={nuevoMensaje} 
-            onChange={(e) => setNuevoMensaje(e.target.value)} 
-            style={{ flex: 1, padding: '12px 14px', borderRadius: '12px', border: '1px solid #E2E8F0', fontSize: '13px', backgroundColor: '#F8F9FA', outline: 'none' }} 
-          />
-          <button 
-            type="submit" 
-            style={{ backgroundColor: '#00A887', color: '#FFFFFF', border: 'none', padding: '0 18px', borderRadius: '12px', fontWeight: 'bold', fontSize: '13px', cursor: 'pointer' }}
-          >
-            Enviar
-          </button>
-        </form>
-
+              </div>
+            );
+          })
+        )}
+        <div ref={mensajesEndRef} />
       </div>
+
+      {/* Barra inferior para escribir y enviar */}
+      <form
+        onSubmit={handleEnviarMensaje}
+        style={{
+          backgroundColor: COLORS.headerBg,
+          padding: '10px 14px',
+          borderTop: `1px solid ${COLORS.border}`,
+          display: 'flex',
+          alignItems: 'center',
+          gap: '10px',
+          maxWidth: '680px',
+          width: '100%',
+          margin: '0 auto',
+          boxSizing: 'border-box'
+        }}
+      >
+        <input
+          type="text"
+          placeholder="Escribe un mensaje..."
+          value={nuevoMensaje}
+          onChange={(e) => setNuevoMensaje(e.target.value)}
+          style={{
+            flex: 1,
+            padding: '12px 16px',
+            borderRadius: '24px',
+            border: `1px solid ${COLORS.border}`,
+            backgroundColor: COLORS.inputBg,
+            color: COLORS.textMain,
+            fontSize: '14px',
+            outline: 'none'
+          }}
+        />
+        <button
+          type="submit"
+          disabled={!nuevoMensaje.trim() || enviando}
+          style={{
+            backgroundColor: nuevoMensaje.trim() ? COLORS.primary : '#222D37',
+            color: nuevoMensaje.trim() ? '#000000' : COLORS.textSecondary,
+            border: 'none',
+            padding: '12px 18px',
+            borderRadius: '24px',
+            fontWeight: 'bold',
+            fontSize: '13px',
+            cursor: nuevoMensaje.trim() ? 'pointer' : 'default'
+          }}
+        >
+          Enviar
+        </button>
+      </form>
     </div>
   );
 }
