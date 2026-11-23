@@ -10,13 +10,15 @@ import {
   doc,
   updateDoc,
   deleteDoc,
-  onSnapshot
+  onSnapshot,
+  setDoc
 } from 'firebase/firestore';
 import logoTecco from './logo.png';
 import RateService from './RateService';
 import UploadPortfolio from './UploadPortfolio';
 import WorkerProfile from './WorkerProfile';
 import MapScreen, { FullMapScreen } from './MapScreen';
+import RealtimeChat from './RealtimeChat';
 import { CloudinaryService } from './cloudinaryService';
 
 const COLORS = {
@@ -48,15 +50,9 @@ const FAQ_ITEMS = [
   },
   {
     pregunta: '¿Cómo me comunico con el técnico antes o durante el servicio?',
-    respuesta: 'Desde el perfil del especialista o desde el mapa de seguimiento, presiona "Chat" para abrir la conversación en tiempo real, que también quedará guardada en la pestaña Mensajes.'
+    respuesta: 'Desde el perfil del especialista o desde la pestaña Mensajes puedes abrir la conversación en tiempo real.'
   }
 ];
-
-const construirSalaId = (emailA, emailB) => {
-  const a = (emailA || 'usuario').trim().toLowerCase();
-  const b = (emailB || 'especialista').trim().toLowerCase();
-  return [a, b].sort().join('__');
-};
 
 export default function App() {
   const [pantalla, setPantalla] = useState('loading');
@@ -105,15 +101,13 @@ export default function App() {
   const [modalFiltroAbierto, setModalFiltroAbierto] = useState(false);
   const [busquedaFiltro, setBusquedaFiltro] = useState('');
 
-  // Galería, Reseñas y Chat en Tiempo Real
+  // Galería, Reseñas, Salas de Chat Guardadas y Contador de Mensajes
   const [galeriaPortafolio, setGaleriaPortafolio] = useState([]);
   const [cargandoGaleria, setCargandoGaleria] = useState(false);
   const [chatActivo, setChatActivo] = useState(false);
   const [chatSalaInfo, setChatSalaInfo] = useState(null);
-  const [mensajesSala, setMensajesSala] = useState([]);
-  const [todosLosMensajes, setTodosLosMensajes] = useState([]);
-  const [textoMensaje, setTextoMensaje] = useState('');
-  const [enviandoMensaje, setEnviandoMensaje] = useState(false);
+  const [salasChatGuardadas, setSalasChatGuardadas] = useState([]);
+  const [mensajesEntrantesCount, setMensajesEntrantesCount] = useState(0);
 
   // Solicitud de Servicio y Seguimiento en Mapa
   const [detallesFallaCliente, setDetallesFallaCliente] = useState("");
@@ -147,15 +141,6 @@ export default function App() {
   };
 
   const route = { params: routeParams };
-
-  const esMismoTrabajador = (worker) => {
-    if (!worker) return false;
-    const correoActual = (email || '').trim().toLowerCase();
-    const correoWorker = (worker.email || '').trim().toLowerCase();
-    if (correoActual && correoWorker && correoActual === correoWorker) return true;
-    if (currentUserDocId && worker.id && currentUserDocId === worker.id) return true;
-    return false;
-  };
 
   useEffect(() => {
     const styleEl = document.createElement('style');
@@ -218,83 +203,97 @@ export default function App() {
     }
   }, [pantalla]);
 
-  // Marcar colaborador inactivo al salir de la pestaña/aplicación
+  // Sincronización automática de estado Activo/Inactivo del trabajador al entrar y salir de la app
   useEffect(() => {
-    const marcarInactivoAlSalir = () => {
-      if (isAuthenticated && route.params.role === 'trabajador' && currentUserDocId) {
-        updateDoc(doc(db, 'trabajadores', currentUserDocId), { disponible: false }).catch(() => {});
+    const esTrabajadorLogueado = isAuthenticated && route.params.role === 'trabajador' && currentUserDocId;
+    if (!esTrabajadorLogueado) return;
+
+    const marcarEstadoTrabajador = async (estadoActivo) => {
+      try {
+        await updateDoc(doc(db, 'trabajadores', currentUserDocId), {
+          disponible: estadoActivo,
+          ultimaConexion: new Date().toISOString()
+        });
+        setDisponible(estadoActivo);
+      } catch (err) {
+        console.error('Error sincronizando estado activo/inactivo:', err);
       }
     };
-    window.addEventListener('pagehide', marcarInactivoAlSalir);
-    window.addEventListener('beforeunload', marcarInactivoAlSalir);
+
+    marcarEstadoTrabajador(true);
+
+    const handleBeforeUnload = () => {
+      updateDoc(doc(db, 'trabajadores', currentUserDocId), {
+        disponible: false,
+        ultimaConexion: new Date().toISOString()
+      }).catch(() => {});
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
     return () => {
-      window.removeEventListener('pagehide', marcarInactivoAlSalir);
-      window.removeEventListener('beforeunload', marcarInactivoAlSalir);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
     };
   }, [isAuthenticated, route.params.role, currentUserDocId]);
 
-  // Sincronización en tiempo real de todos los mensajes para listar chats guardados
+  // Escucha en tiempo real de salas de chat guardadas y solicitudes
   useEffect(() => {
-    const unsubscribe = onSnapshot(
-      collection(db, 'chats_mensajes'),
-      (snapshot) => {
-        const lista = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-        lista.sort((a, b) => {
-          const ta = a.createdAtMillis || (a.createdAt?.seconds ? a.createdAt.seconds * 1000 : 0);
-          const tb = b.createdAtMillis || (b.createdAt?.seconds ? b.createdAt.seconds * 1000 : 0);
-          return ta - tb;
-        });
-        setTodosLosMensajes(lista);
-      },
-      (error) => {
-        console.error("Error observando chats_mensajes:", error);
-      }
-    );
-    return () => unsubscribe();
-  }, []);
-
-  // Mensajes de la sala abierta en tiempo real
-  useEffect(() => {
-    if (!chatActivo || !chatSalaInfo?.salaId) {
-      setMensajesSala([]);
+    if (!isAuthenticated || !email) {
+      setSalasChatGuardadas([]);
+      setMensajesEntrantesCount(0);
       return;
     }
-    const salaObjetivo = chatSalaInfo.salaId.toLowerCase();
-    const filtrados = todosLosMensajes.filter(
-      (m) => (m.salaId || '').toLowerCase() === salaObjetivo
+
+    const emailUsuario = email.trim().toLowerCase();
+
+    const unsubSalas = onSnapshot(
+      collection(db, 'chats_salas'),
+      (snapshot) => {
+        const salas = snapshot.docs
+          .map((d) => ({ id: d.id, ...d.data() }))
+          .filter(
+            (s) =>
+              (s.clienteEmail || '').toLowerCase() === emailUsuario ||
+              (s.trabajadorEmail || '').toLowerCase() === emailUsuario ||
+              (Array.isArray(s.participantes) && s.participantes.includes(emailUsuario))
+          )
+          .sort((a, b) => (b.actualizadoEnMs || 0) - (a.actualizadoEnMs || 0));
+
+        setSalasChatGuardadas(salas);
+      },
+      (error) => console.error('Error al escuchar salas de chat:', error)
     );
-    setMensajesSala(filtrados);
-  }, [chatActivo, chatSalaInfo, todosLosMensajes]);
 
-  // Conversaciones guardadas del usuario actual
-  const conversacionesGuardadas = useMemo(() => {
-    const miCorreo = (email || '').trim().toLowerCase();
-    if (!miCorreo) return [];
+    const unsubMensajes = onSnapshot(
+      collection(db, 'chats_mensajes'),
+      (snapshot) => {
+        let contador = 0;
+        snapshot.docs.forEach((docItem) => {
+          const data = docItem.data();
+          const perteneceASala = typeof data.salaId === 'string' && data.salaId.includes(emailUsuario);
+          const esDeOtro = (data.remitenteEmail || '').toLowerCase() !== emailUsuario;
+          if (perteneceASala && esDeOtro) {
+            contador += 1;
+          }
+        });
+        setMensajesEntrantesCount(contador);
+      },
+      (error) => console.error('Error al observar mensajes:', error)
+    );
 
-    const mapaSalas = new Map();
-    todosLosMensajes.forEach((msg) => {
-      const salaKey = (msg.salaId || '').toLowerCase();
-      if (!salaKey || !salaKey.includes(miCorreo)) return;
+    const unsubSolicitudes = onSnapshot(
+      collection(db, 'solicitudes_servicio'),
+      (snapshot) => {
+        setSolicitudes(snapshot.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() })));
+      },
+      (error) => console.error('Error al escuchar solicitudes:', error)
+    );
 
-      const esMio = (msg.remitenteEmail || '').toLowerCase() === miCorreo;
-      const contraparteCorreo = esMio
-        ? (msg.destinatarioEmail || salaKey.split('__').find(p => p !== miCorreo) || 'contacto')
-        : (msg.remitenteEmail || 'contacto');
-      const contraparteNombre = esMio
-        ? (msg.destinatarioNombre || contraparteCorreo)
-        : (msg.remitenteNombre || contraparteCorreo);
-
-      mapaSalas.set(salaKey, {
-        salaId: salaKey,
-        contraparteEmail: contraparteCorreo,
-        contraparteNombre,
-        ultimoTexto: msg.texto || '',
-        ultimoTiempo: msg.createdAtMillis || 0
-      });
-    });
-
-    return Array.from(mapaSalas.values()).sort((a, b) => b.ultimoTiempo - a.ultimoTiempo);
-  }, [todosLosMensajes, email]);
+    return () => {
+      unsubSalas();
+      unsubMensajes();
+      unsubSolicitudes();
+    };
+  }, [isAuthenticated, email]);
 
   const cargarDatosFirestore = async () => {
     setCargandoDatos(true);
@@ -413,6 +412,16 @@ export default function App() {
     return `Servicios profesionales en ${trabajador?.oficio || 'mantenimiento general'} · Exp: ${trabajador?.anosExperiencia || '3 años'}.`;
   };
 
+  const esMismoUsuarioQueTrabajador = (workerTarget) => {
+    if (!workerTarget) return false;
+    const emailActual = (email || '').trim().toLowerCase();
+    const emailWorker = (workerTarget.email || '').trim().toLowerCase();
+    if (route.params.role === 'trabajador' && isAuthenticated) return true;
+    if (emailActual && emailWorker && emailActual === emailWorker) return true;
+    if (currentUserDocId && workerTarget.id && currentUserDocId === workerTarget.id) return true;
+    return false;
+  };
+
   const abrirPerfilDetallado = async (trabajador) => {
     setModalFiltroAbierto(false);
     setPerfilSeleccionado(trabajador);
@@ -433,13 +442,13 @@ export default function App() {
 
   const irASolicitarServicio = (workerTarget = null) => {
     const objetivo = workerTarget || perfilSeleccionado;
-    if (objetivo) {
-      setPerfilSeleccionado(objetivo);
+    if (esMismoUsuarioQueTrabajador(objetivo)) {
+      mostrarAviso('No puedes solicitar un servicio en modo trabajador o a tu propio perfil.', 'error');
+      return;
     }
 
-    if (esMismoTrabajador(objetivo)) {
-      mostrarAviso('No puedes solicitar un servicio a tu propio perfil.', 'error');
-      return;
+    if (workerTarget) {
+      setPerfilSeleccionado(workerTarget);
     }
 
     if (!isAuthenticated) {
@@ -453,7 +462,7 @@ export default function App() {
     setPantalla('SolicitarTrabajo');
   };
 
-  const abrirChatConEspecialista = (workerTarget = null, salaDirecta = null) => {
+  const abrirChatConEspecialista = async (workerTarget = null) => {
     const objetivo = workerTarget || perfilSeleccionado;
     if (objetivo) {
       setPerfilSeleccionado(objetivo);
@@ -467,45 +476,50 @@ export default function App() {
       return;
     }
 
-    const miCorreo = (email || 'usuario').trim().toLowerCase();
-    const otroCorreo = (salaDirecta?.contraparteEmail || objetivo?.email || objetivo?.id || 'especialista').trim().toLowerCase();
-    const salaGenerada = salaDirecta?.salaId || construirSalaId(miCorreo, otroCorreo);
+    const clienteKey = (email || 'cliente').trim().toLowerCase();
+    const workerKey = (objetivo?.email || objetivo?.id || 'especialista').trim().toLowerCase();
+    const salaGenerada = `sala_${clienteKey}__${workerKey}`;
+
+    try {
+      await setDoc(
+        doc(db, 'chats_salas', salaGenerada),
+        {
+          salaId: salaGenerada,
+          clienteEmail: clienteKey,
+          clienteNombre: nombre || 'Cliente TECCO',
+          trabajadorEmail: workerKey,
+          trabajadorNombre: objetivo?.nombre || 'Especialista TECCO',
+          participantes: [clienteKey, workerKey],
+          actualizadoEnMs: Date.now(),
+          actualizadoEn: serverTimestamp()
+        },
+        { merge: true }
+      );
+    } catch (err) {
+      console.error('Error registrando sala de chat:', err);
+    }
 
     setChatSalaInfo({
-      salaId: salaGenerada.toLowerCase(),
-      nombreContraparte: salaDirecta?.contraparteNombre || objetivo?.nombre || 'Especialista TECCO',
-      contraparteEmail: otroCorreo
+      salaId: salaGenerada,
+      nombreContraparte: objetivo?.nombre || 'Especialista TECCO',
+      emailContraparte: workerKey
     });
     setChatActivo(true);
   };
 
-  const handleEnviarMensajeChat = async (e) => {
-    e.preventDefault();
-    if (!textoMensaje.trim() || !chatSalaInfo?.salaId || enviandoMensaje) return;
-
-    const miCorreo = (email || 'usuario').trim().toLowerCase();
-    const otroCorreo = (chatSalaInfo.contraparteEmail || '').trim().toLowerCase();
-
-    setEnviandoMensaje(true);
-    try {
-      await addDoc(collection(db, 'chats_mensajes'), {
-        salaId: chatSalaInfo.salaId.toLowerCase(),
-        texto: textoMensaje.trim(),
-        remitenteEmail: miCorreo,
-        remitenteNombre: nombre || miCorreo,
-        remitenteRol: route.params.role || 'cliente',
-        destinatarioEmail: otroCorreo,
-        destinatarioNombre: chatSalaInfo.nombreContraparte || otroCorreo,
-        createdAt: serverTimestamp(),
-        createdAtMillis: Date.now()
-      });
-      setTextoMensaje('');
-    } catch (error) {
-      console.error("Error al enviar mensaje:", error);
-      mostrarAviso('No se pudo enviar el mensaje.', 'error');
-    } finally {
-      setEnviandoMensaje(false);
+  const abrirChatSoporte = () => {
+    if (!isAuthenticated) {
+      mostrarAviso('Inicia sesión para contactar a Soporte TECCO.', 'info');
+      navigation.navigate('Auth', { role: route.params.role || 'cliente', initialMode: 'login' });
+      return;
     }
+    const emailPropio = (email || 'usuario').trim().toLowerCase();
+    setChatSalaInfo({
+      salaId: `sala_${emailPropio}__soporte@tecco.com`,
+      nombreContraparte: 'Soporte TECCO',
+      emailContraparte: 'soporte@tecco.com'
+    });
+    setChatActivo(true);
   };
 
   const handleEnviarSolicitudTrabajo = async (e) => {
@@ -517,7 +531,7 @@ export default function App() {
     }
 
     const especialistaDestino = perfilSeleccionado;
-    if (esMismoTrabajador(especialistaDestino)) {
+    if (esMismoUsuarioQueTrabajador(especialistaDestino)) {
       mostrarAviso('No puedes enviarte una solicitud a ti mismo.', 'error');
       return;
     }
@@ -556,25 +570,27 @@ export default function App() {
       setPantalla('MapaSolicitud');
     } catch (error) {
       console.error("Error al enviar solicitud:", error);
-      mostrarAviso('No se pudo guardar la solicitud.', 'error');
+      mostrarAviso('No se pudo guardar la solicitud. Revisa tu conexión.', 'error');
     } finally {
       setEnviandoSolicitud(false);
     }
   };
 
-  const handleResponderSolicitudTrabajador = async (solicitudId, nuevoEstado) => {
+  const handleResponderSolicitudTrabajador = async (solicitudItem, nuevoEstado) => {
     try {
-      await updateDoc(doc(db, 'solicitudes_servicio', solicitudId), {
+      await updateDoc(doc(db, 'solicitudes_servicio', solicitudItem.id), {
         estado: nuevoEstado,
         respondidoEn: new Date().toISOString()
       });
       await cargarDatosFirestore();
       mostrarAviso(
-        nuevoEstado === 'Aceptada' ? 'Solicitud aceptada.' : 'Solicitud rechazada.',
+        nuevoEstado === 'Aceptada'
+          ? 'Has aceptado la solicitud de servicio.'
+          : 'Has rechazado la solicitud.',
         nuevoEstado === 'Aceptada' ? 'success' : 'info'
       );
     } catch (error) {
-      console.error("Error al actualizar solicitud:", error);
+      console.error('Error al actualizar solicitud:', error);
       mostrarAviso('No se pudo actualizar el estado de la solicitud.', 'error');
     }
   };
@@ -595,7 +611,7 @@ export default function App() {
       setNavTab('inicio');
     } catch (error) {
       console.error("Error al cancelar solicitud:", error);
-      mostrarAviso('No se pudo cancelar la solicitud.', 'error');
+      mostrarAviso('No se pudo cancelar la solicitud. Intenta de nuevo.', 'error');
     } finally {
       setCancelandoSolicitud(false);
     }
@@ -621,7 +637,7 @@ export default function App() {
         const horaActual = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         setUltimaActualizacionServicio(horaActual);
         await cargarDatosFirestore();
-        mostrarAviso(nuevoEstado ? 'Estado cambiado a Activo.' : 'Estado cambiado a Inactivo.', 'success');
+        mostrarAviso(nuevoEstado ? 'Estado: Activo en la lista.' : 'Estado: Inactivo en la lista.', 'success');
       } catch (error) {
         console.error("Error actualizando disponibilidad:", error);
         mostrarAviso('No se pudo actualizar el estado.', 'error');
@@ -732,7 +748,6 @@ export default function App() {
         setErroresAuth({});
 
         if (rolActual === 'trabajador') {
-          await updateDoc(doc(db, 'trabajadores', docSnap.id), { disponible: true });
           setOficio(userData.oficio || 'Aire acondicionado');
           setAnosExperiencia(userData.anosExperiencia || '3 años');
           setDescripcionServicio(userData.descripcion || '');
@@ -740,6 +755,7 @@ export default function App() {
           setTelefono(userData.telefono || '');
           setDisponible(true);
           setFotosTrabajos(userData.fotosTrabajos || '');
+          await updateDoc(doc(db, 'trabajadores', docSnap.id), { disponible: true });
         }
 
         mostrarAviso(`Bienvenido de nuevo, ${userData.nombre || 'Usuario'}.`, 'success');
@@ -750,11 +766,11 @@ export default function App() {
           setPantallaPendiente(null);
           if (destino === 'AbrirChat') {
             setPantalla('DetallePerfil');
-            const otroCorreo = (perfilSeleccionado?.email || perfilSeleccionado?.id || 'especialista').trim().toLowerCase();
+            const workerKey = (perfilSeleccionado?.email || perfilSeleccionado?.id || 'especialista').trim().toLowerCase();
             setChatSalaInfo({
-              salaId: construirSalaId(emailLimpio, otroCorreo),
+              salaId: `sala_${emailLimpio}__${workerKey}`,
               nombreContraparte: perfilSeleccionado?.nombre || 'Especialista TECCO',
-              contraparteEmail: otroCorreo
+              emailContraparte: workerKey
             });
             setChatActivo(true);
           } else {
@@ -806,11 +822,11 @@ export default function App() {
             setPantallaPendiente(null);
             if (destino === 'AbrirChat') {
               setPantalla('DetallePerfil');
-              const otroCorreo = (perfilSeleccionado?.email || perfilSeleccionado?.id || 'especialista').trim().toLowerCase();
+              const workerKey = (perfilSeleccionado?.email || perfilSeleccionado?.id || 'especialista').trim().toLowerCase();
               setChatSalaInfo({
-                salaId: construirSalaId(emailLimpio, otroCorreo),
+                salaId: `sala_${emailLimpio}__${workerKey}`,
                 nombreContraparte: perfilSeleccionado?.nombre || 'Especialista TECCO',
-                contraparteEmail: otroCorreo
+                emailContraparte: workerKey
               });
               setChatActivo(true);
             } else {
@@ -841,14 +857,14 @@ export default function App() {
 
       if (!querySnapshot.empty) {
         const docSnap = querySnapshot.docs[0];
-        if (rolActual === 'trabajador') {
-          await updateDoc(doc(db, 'trabajadores', docSnap.id), { disponible: true });
-          setDisponible(true);
-        }
         setCurrentUserDocId(docSnap.id);
         setNombre(dummyNombre);
         setEmail(dummyEmail);
         setIsAuthenticated(true);
+        if (rolActual === 'trabajador') {
+          setDisponible(true);
+          await updateDoc(doc(db, 'trabajadores', docSnap.id), { disponible: true });
+        }
         await cargarDatosFirestore();
       } else {
         const docRef = await addDoc(collection(db, coleccionObjetivo), {
@@ -866,6 +882,7 @@ export default function App() {
         setNombre(dummyNombre);
         setEmail(dummyEmail);
         setIsAuthenticated(true);
+        setDisponible(true);
         await cargarDatosFirestore();
       }
 
@@ -876,11 +893,11 @@ export default function App() {
         setPantallaPendiente(null);
         if (destino === 'AbrirChat') {
           setPantalla('DetallePerfil');
-          const otroCorreo = (perfilSeleccionado?.email || perfilSeleccionado?.id || 'especialista').trim().toLowerCase();
+          const workerKey = (perfilSeleccionado?.email || perfilSeleccionado?.id || 'especialista').trim().toLowerCase();
           setChatSalaInfo({
-            salaId: construirSalaId(dummyEmail, otroCorreo),
+            salaId: `sala_${dummyEmail}__${workerKey}`,
             nombreContraparte: perfilSeleccionado?.nombre || 'Especialista TECCO',
-            contraparteEmail: otroCorreo
+            emailContraparte: workerKey
           });
           setChatActivo(true);
         } else {
@@ -923,9 +940,9 @@ export default function App() {
 
       setCurrentUserDocId(docRef.id);
       setEmail(emailFinal);
-      setDisponible(true);
       setIsAuthenticated(true);
-      mostrarAviso('Perfil profesional publicado y activo.', 'success');
+      setDisponible(true);
+      mostrarAviso('Perfil profesional publicado correctamente.', 'success');
       await cargarDatosFirestore();
       setPantalla('Home');
       setNavTab('panel');
@@ -938,14 +955,18 @@ export default function App() {
   const cerrarSesion = async () => {
     if (route.params.role === 'trabajador' && currentUserDocId) {
       try {
-        await updateDoc(doc(db, 'trabajadores', currentUserDocId), { disponible: false });
+        await updateDoc(doc(db, 'trabajadores', currentUserDocId), {
+          disponible: false,
+          ultimaConexion: new Date().toISOString()
+        });
       } catch (e) {
-        console.error("Error al marcar inactivo al cerrar sesión:", e);
+        console.error('Error al poner trabajador en inactivo:', e);
       }
     }
-    setDisponible(false);
+
     setIsAuthenticated(false);
     setCurrentUserDocId(null);
+    setDisponible(false);
     setNombre("");
     setEmail("");
     setPassword("");
@@ -954,11 +975,13 @@ export default function App() {
     setPantallaPendiente(null);
     setChatActivo(false);
     setChatSalaInfo(null);
+    setSalasChatGuardadas([]);
     setUltimaSolicitudEnviada(null);
+    setMensajesEntrantesCount(0);
     setRouteParams(prev => ({ ...prev, role: 'cliente' }));
     setNavTab('inicio');
     await cargarDatosFirestore();
-    mostrarAviso('Sesión cerrada y estado actualizado.', 'info');
+    mostrarAviso('Has cerrado sesión.', 'info');
   };
 
   const renderToast = () => {
@@ -996,19 +1019,21 @@ export default function App() {
       return (
         <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, backgroundColor: '#101B22', borderTop: `1px solid ${COLORS.border}`, display: 'flex', justifyContent: 'space-around', padding: '14px 0', zIndex: 1000, width: '100%' }}>
           <div onClick={() => { setPantalla('Home'); setNavTab('panel'); }} style={{ textAlign: 'center', cursor: 'pointer', color: navTab === 'panel' ? COLORS.accentWorker : COLORS.textSecondary }}>
-            <div style={{ fontSize: '12px', fontWeight: 'bold' }}>Mi Panel</div>
+            <div style={{ fontSize: '12px', fontWeight: 'bold' }}>Mi Perfil</div>
           </div>
           <div onClick={() => { setPantalla('Home'); setNavTab('mi_servicio'); }} style={{ textAlign: 'center', cursor: 'pointer', color: navTab === 'mi_servicio' ? COLORS.accentWorker : COLORS.textSecondary }}>
-            <div style={{ fontSize: '12px', fontWeight: 'bold' }}>Publicar Servicio</div>
+            <div style={{ fontSize: '12px', fontWeight: 'bold' }}>Publicar</div>
           </div>
           <div onClick={() => { setPantalla('Home'); setNavTab('solicitudes'); }} style={{ textAlign: 'center', cursor: 'pointer', color: navTab === 'solicitudes' ? COLORS.accentWorker : COLORS.textSecondary }}>
             <div style={{ fontSize: '12px', fontWeight: 'bold' }}>Solicitudes</div>
           </div>
-          <div onClick={() => { setPantalla('Home'); setNavTab('mensajes'); }} style={{ textAlign: 'center', cursor: 'pointer', color: navTab === 'mensajes' ? COLORS.accentWorker : COLORS.textSecondary }}>
-            <div style={{ fontSize: '12px', fontWeight: 'bold' }}>Mensajes</div>
-          </div>
-          <div onClick={() => { setPantalla('Home'); setNavTab('cuenta'); }} style={{ textAlign: 'center', cursor: 'pointer', color: navTab === 'cuenta' ? COLORS.accentWorker : COLORS.textSecondary }}>
-            <div style={{ fontSize: '12px', fontWeight: 'bold' }}>Perfil</div>
+          <div onClick={() => { setPantalla('Home'); setNavTab('mensajes'); }} style={{ textAlign: 'center', cursor: 'pointer', color: navTab === 'mensajes' ? COLORS.accentWorker : COLORS.textSecondary, display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+            <span style={{ fontSize: '12px', fontWeight: 'bold' }}>Mensajes</span>
+            {mensajesEntrantesCount > 0 && (
+              <span style={{ backgroundColor: COLORS.accentWorker, color: '#000000', fontSize: '10px', fontWeight: 'bold', padding: '1px 6px', borderRadius: '999px' }}>
+                {mensajesEntrantesCount}
+              </span>
+            )}
           </div>
         </div>
       );
@@ -1019,92 +1044,134 @@ export default function App() {
         <div onClick={() => { setPantalla('Home'); setNavTab('inicio'); setModalFiltroAbierto(false); }} style={{ textAlign: 'center', cursor: 'pointer', color: navTab === 'inicio' ? COLORS.primary : COLORS.textSecondary }}>
           <div style={{ fontSize: '12px', fontWeight: 'bold' }}>Inicio</div>
         </div>
-        <div onClick={() => { setPantalla('Home'); setNavTab('mensajes'); setModalFiltroAbierto(false); }} style={{ textAlign: 'center', cursor: 'pointer', color: navTab === 'mensajes' ? COLORS.primary : COLORS.textSecondary }}>
-          <div style={{ fontSize: '12px', fontWeight: 'bold' }}>Mensajes</div>
+        <div onClick={() => { setPantalla('Home'); setNavTab('mensajes'); setModalFiltroAbierto(false); }} style={{ textAlign: 'center', cursor: 'pointer', color: navTab === 'mensajes' ? COLORS.primary : COLORS.textSecondary, position: 'relative', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+          <span style={{ fontSize: '12px', fontWeight: 'bold' }}>Mensajes</span>
+          {mensajesEntrantesCount > 0 && (
+            <span style={{ backgroundColor: COLORS.primary, color: '#000000', fontSize: '10px', fontWeight: 'bold', padding: '1px 6px', borderRadius: '999px' }}>
+              {mensajesEntrantesCount}
+            </span>
+          )}
         </div>
         <div onClick={() => { setPantalla('Home'); setNavTab('cuenta'); setModalFiltroAbierto(false); }} style={{ textAlign: 'center', cursor: 'pointer', color: navTab === 'cuenta' ? COLORS.primary : COLORS.textSecondary }}>
-          <div style={{ fontSize: '12px', fontWeight: 'bold' }}>Cuenta</div>
+          <div style={{ fontSize: '12px', fontWeight: 'bold' }}>Perfil</div>
         </div>
       </div>
     );
   };
 
-  // =========================================================================
-  // CHAT EN TIEMPO REAL DIRECTO (SINCRONIZADO CON chats_mensajes)
-  // =========================================================================
-  if (chatActivo) {
-    const miCorreo = (email || '').trim().toLowerCase();
-    return (
-      <div style={{ backgroundColor: COLORS.background, minHeight: '100vh', width: '100%', display: 'flex', flexDirection: 'column', fontFamily: 'Inter, sans-serif', color: COLORS.textMain }}>
-        {renderToast()}
-        <div style={{ backgroundColor: '#101B22', padding: '14px 16px', borderBottom: `1px solid ${COLORS.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <button
-              type="button"
-              onClick={() => { setChatActivo(false); setChatSalaInfo(null); }}
-              style={{ background: 'none', border: 'none', color: COLORS.primary, fontSize: '16px', fontWeight: 'bold', cursor: 'pointer' }}
-            >
-              ← Volver
-            </button>
-            <div>
-              <div style={{ fontSize: '15px', fontWeight: 'bold', color: COLORS.textMain }}>
-                {chatSalaInfo?.nombreContraparte || 'Conversación'}
-              </div>
-              <div style={{ fontSize: '11px', color: COLORS.textSecondary }}>
-                Chat guardado en tiempo real
-              </div>
-            </div>
-          </div>
-        </div>
+  const renderListaChatsGuardados = (esTrabajador = false) => {
+    const emailPropio = (email || '').trim().toLowerCase();
+    const chatsFiltrados = salasChatGuardadas.filter(
+      (s) => s.trabajadorEmail !== 'soporte@tecco.com'
+    );
 
-        <div style={{ flex: 1, padding: '16px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', maxWidth: '640px', width: '100%', margin: '0 auto' }}>
-          {mensajesSala.length === 0 ? (
-            <p style={{ textAlign: 'center', color: COLORS.textSecondary, fontSize: '13px', marginTop: '30px' }}>
-              Aún no hay mensajes en esta conversación. Escribe para comenzar.
-            </p>
-          ) : (
-            mensajesSala.map((msg) => {
-              const esMio = (msg.remitenteEmail || '').toLowerCase() === miCorreo;
-              return (
+    if (!isAuthenticated) {
+      return (
+        <div style={{ backgroundColor: COLORS.card, padding: '20px', borderRadius: '16px', border: `1px solid ${COLORS.border}`, textAlign: 'center' }}>
+          <p style={{ color: COLORS.textSecondary, fontSize: '13px', marginBottom: '12px' }}>
+            Inicia sesión para ver tus conversaciones guardadas.
+          </p>
+          <button
+            onClick={() => navigation.navigate('Auth', { role: esTrabajador ? 'trabajador' : 'cliente', initialMode: 'login' })}
+            style={{ backgroundColor: esTrabajador ? COLORS.accentWorker : COLORS.primary, color: '#000', border: 'none', padding: '12px 20px', borderRadius: '10px', fontWeight: 'bold', cursor: 'pointer' }}
+          >
+            Iniciar sesión
+          </button>
+        </div>
+      );
+    }
+
+    if (chatsFiltrados.length === 0) {
+      return (
+        <div style={{ backgroundColor: COLORS.card, padding: '22px', borderRadius: '16px', border: `1px solid ${COLORS.border}`, textAlign: 'center' }}>
+          <p style={{ color: COLORS.textSecondary, fontSize: '13px', margin: 0 }}>
+            Aún no tienes chats guardados con {esTrabajador ? 'clientes' : 'especialistas'}.
+          </p>
+        </div>
+      );
+    }
+
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+        {chatsFiltrados.map((sala) => {
+          const soyCliente = (sala.clienteEmail || '').toLowerCase() === emailPropio;
+          const nombreOtro = soyCliente ? (sala.trabajadorNombre || 'Especialista') : (sala.clienteNombre || 'Cliente');
+          const emailOtro = soyCliente ? sala.trabajadorEmail : sala.clienteEmail;
+          return (
+            <div
+              key={sala.id}
+              onClick={() => {
+                setChatSalaInfo({
+                  salaId: sala.salaId || sala.id,
+                  nombreContraparte: nombreOtro,
+                  emailContraparte: emailOtro
+                });
+                setChatActivo(true);
+              }}
+              style={{
+                backgroundColor: COLORS.card,
+                padding: '14px 16px',
+                borderRadius: '14px',
+                border: `1px solid ${COLORS.border}`,
+                cursor: 'pointer',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                gap: '12px'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1 }}>
                 <div
-                  key={msg.id}
                   style={{
-                    alignSelf: esMio ? 'flex-end' : 'flex-start',
-                    backgroundColor: esMio ? '#0B4F43' : COLORS.card,
-                    color: COLORS.textMain,
-                    border: `1px solid ${esMio ? COLORS.primary : COLORS.border}`,
-                    padding: '10px 14px',
-                    borderRadius: '14px',
-                    maxWidth: '78%'
+                    width: '40px',
+                    height: '40px',
+                    borderRadius: '50%',
+                    backgroundColor: '#1E2D38',
+                    color: esTrabajador ? COLORS.accentWorker : COLORS.primary,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontWeight: 'bold',
+                    fontSize: '15px',
+                    flexShrink: 0
                   }}
                 >
-                  <div style={{ fontSize: '13px', lineHeight: '1.4' }}>{msg.texto}</div>
+                  {nombreOtro.charAt(0).toUpperCase()}
                 </div>
-              );
-            })
-          )}
-        </div>
-
-        <form
-          onSubmit={handleEnviarMensajeChat}
-          style={{ backgroundColor: '#101B22', borderTop: `1px solid ${COLORS.border}`, padding: '12px 16px', display: 'flex', gap: '10px', maxWidth: '640px', width: '100%', margin: '0 auto' }}
-        >
-          <input
-            type="text"
-            placeholder="Escribe un mensaje..."
-            value={textoMensaje}
-            onChange={(e) => setTextoMensaje(e.target.value)}
-            style={{ flex: 1, padding: '12px 14px', borderRadius: '12px', border: `1px solid ${COLORS.border}`, backgroundColor: COLORS.card, color: COLORS.textMain, fontSize: '13px' }}
-          />
-          <button
-            type="submit"
-            disabled={enviandoMensaje}
-            style={{ backgroundColor: COLORS.primary, color: '#000000', border: 'none', padding: '0 18px', borderRadius: '12px', fontWeight: 'bold', fontSize: '13px', cursor: 'pointer' }}
-          >
-            Enviar
-          </button>
-        </form>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: '14px', fontWeight: 'bold', color: COLORS.textMain }}>{nombreOtro}</div>
+                  <div style={{ fontSize: '12px', color: COLORS.textSecondary, marginTop: '2px' }}>
+                    {sala.ultimoMensaje || 'Abrir conversación'}
+                  </div>
+                </div>
+              </div>
+              <span style={{ fontSize: '12px', fontWeight: 'bold', color: esTrabajador ? COLORS.accentWorker : COLORS.primary }}>
+                Abrir →
+              </span>
+            </div>
+          );
+        })}
       </div>
+    );
+  };
+
+  // =========================================================================
+  // CHAT EN TIEMPO REAL
+  // =========================================================================
+  if (chatActivo) {
+    return (
+      <RealtimeChat
+        salaId={chatSalaInfo?.salaId || perfilSeleccionado?.id}
+        currentUserEmail={email || route.params.email}
+        currentUserRole={route.params.role}
+        currentUserName={nombre || route.params.nombre}
+        contraparteNombre={chatSalaInfo?.nombreContraparte || perfilSeleccionado?.nombre}
+        contraparteEmail={chatSalaInfo?.emailContraparte || perfilSeleccionado?.email}
+        onClose={() => {
+          setChatActivo(false);
+          setChatSalaInfo(null);
+        }}
+      />
     );
   }
 
@@ -1120,9 +1187,9 @@ export default function App() {
         <div style={{ maxWidth: '640px', margin: '0 auto', width: '100%' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '10px', marginBottom: '14px', backgroundColor: COLORS.card, padding: '14px 16px', borderRadius: '14px', border: `1px solid ${COLORS.border}`, flexWrap: 'wrap' }}>
             <div>
-              <h2 style={{ fontSize: '16px', margin: 0, color: COLORS.primary, fontWeight: 'bold' }}>Solicitud enviada · Seguimiento en mapa</h2>
+              <h2 style={{ fontSize: '16px', margin: 0, color: COLORS.primary, fontWeight: 'bold' }}>Solicitud guardada · Seguimiento en mapa</h2>
               <p style={{ fontSize: '12px', color: COLORS.textSecondary, margin: '4px 0 0 0' }}>
-                {ultimaSolicitudEnviada?.destinatario || perfilSeleccionado?.nombre || 'Especialista'} · {ultimaSolicitudEnviada?.zona || zonaSolicitud} · Estado: {ultimaSolicitudEnviada?.estado || 'Pendiente'}
+                {ultimaSolicitudEnviada?.destinatario || perfilSeleccionado?.nombre || 'Especialista'} · {ultimaSolicitudEnviada?.zona || zonaSolicitud}
               </p>
               {ultimaSolicitudEnviada?.direccion_exacta && (
                 <p style={{ fontSize: '12px', color: '#CBD5E0', margin: '4px 0 0 0' }}>
@@ -1178,16 +1245,16 @@ export default function App() {
   // =========================================================================
   if (pantalla === 'Home') {
     const esColaborador = route.params.role === 'trabajador' && isAuthenticated;
-    const miCorreoNormalizado = (email || '').trim().toLowerCase();
 
     // 1. VISTA EXCLUSIVA PARA COLABORADOR
     if (esColaborador) {
-      const misSolicitudes = solicitudes.filter((s) => {
-        const porCorreo = s.trabajador_email && s.trabajador_email.toLowerCase() === miCorreoNormalizado;
-        const porId = s.trabajador_id && currentUserDocId && s.trabajador_id === currentUserDocId;
-        const porNombre = s.destinatario && nombre && s.destinatario.toLowerCase() === nombre.trim().toLowerCase();
-        return porCorreo || porId || porNombre;
-      });
+      const emailTrabajador = (email || '').trim().toLowerCase();
+      const misSolicitudes = solicitudes.filter(
+        (s) =>
+          (s.trabajador_email && s.trabajador_email.toLowerCase() === emailTrabajador) ||
+          (s.trabajador_id && currentUserDocId && s.trabajador_id === currentUserDocId) ||
+          (s.destinatario && nombre && s.destinatario.toLowerCase() === nombre.toLowerCase())
+      );
 
       return (
         <div style={{ backgroundColor: COLORS.background, minHeight: '100vh', width: '100%', padding: '16px 16px 80px 16px', fontFamily: 'Inter, sans-serif', color: COLORS.textMain, overflowY: 'auto' }}>
@@ -1196,9 +1263,14 @@ export default function App() {
 
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#131F2A', padding: '14px 16px', borderRadius: '16px', border: `1px solid ${COLORS.border}`, marginBottom: '20px' }}>
               <div>
-                <span style={{ fontSize: '10px', backgroundColor: 'rgba(245, 158, 11, 0.15)', color: COLORS.accentWorker, padding: '3px 8px', borderRadius: '6px', fontWeight: 'bold', letterSpacing: '0.5px' }}>
-                  MODO COLABORADOR
-                </span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ fontSize: '10px', backgroundColor: 'rgba(245, 158, 11, 0.15)', color: COLORS.accentWorker, padding: '3px 8px', borderRadius: '6px', fontWeight: 'bold', letterSpacing: '0.5px' }}>
+                    PERFIL TRABAJADOR
+                  </span>
+                  <span style={{ fontSize: '10px', backgroundColor: disponible ? 'rgba(0, 168, 135, 0.16)' : 'rgba(252, 129, 129, 0.15)', color: disponible ? COLORS.primary : COLORS.error, padding: '3px 8px', borderRadius: '6px', fontWeight: 'bold' }}>
+                    {disponible ? 'ACTIVO' : 'INACTIVO'}
+                  </span>
+                </div>
                 <h2 style={{ fontSize: '18px', fontWeight: 'bold', margin: '4px 0 0 0', color: COLORS.textMain }}>Hola, {nombre || 'Especialista'}</h2>
               </div>
               <button 
@@ -1214,7 +1286,7 @@ export default function App() {
                 <div style={{ backgroundColor: COLORS.card, borderRadius: '16px', padding: '18px', border: `1px solid ${COLORS.border}`, marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
                   <div>
                     <h3 style={{ fontSize: '15px', margin: '0 0 4px 0', color: COLORS.textMain }}>Estado en la Lista</h3>
-                    <p style={{ fontSize: '12px', color: disponible ? COLORS.primary : COLORS.textSecondary, margin: 0, fontWeight: 'bold' }}>
+                    <p style={{ fontSize: '12px', color: disponible ? COLORS.primary : COLORS.error, margin: 0, fontWeight: 'bold' }}>
                       {disponible ? 'Activo: Visible para clientes ahora' : 'Inactivo: Oculto del catálogo'}
                     </p>
                     {ultimaActualizacionServicio && (
@@ -1227,7 +1299,7 @@ export default function App() {
                     onClick={toggleDisponibilidadTrabajador}
                     style={{ backgroundColor: disponible ? COLORS.primary : '#2D3748', color: disponible ? '#000' : '#FFF', border: 'none', padding: '10px 16px', borderRadius: '12px', fontWeight: 'bold', fontSize: '12px', cursor: 'pointer' }}
                   >
-                    {disponible ? 'Desactivar' : 'Activar'}
+                    {disponible ? 'Poner Inactivo' : 'Poner Activo'}
                   </button>
                 </div>
 
@@ -1237,17 +1309,15 @@ export default function App() {
                     <h4 style={{ fontSize: '24px', margin: 0, color: COLORS.textMain }}>{misSolicitudes.length}</h4>
                   </div>
                   <div style={{ backgroundColor: COLORS.card, padding: '16px', borderRadius: '16px', border: `1px solid ${COLORS.border}` }}>
-                    <p style={{ fontSize: '12px', color: COLORS.textSecondary, margin: '0 0 4px 0' }}>Estado actual</p>
-                    <h4 style={{ fontSize: '16px', margin: '4px 0 0 0', color: disponible ? COLORS.primary : COLORS.textSecondary }}>
-                      {disponible ? 'Activo' : 'Inactivo'}
-                    </h4>
+                    <p style={{ fontSize: '12px', color: COLORS.textSecondary, margin: '0 0 4px 0' }}>Calificación</p>
+                    <h4 style={{ fontSize: '24px', margin: 0, color: '#E2B714' }}>5.0</h4>
                   </div>
                 </div>
 
                 <div style={{ backgroundColor: COLORS.card, borderRadius: '16px', padding: '18px', border: `1px solid ${COLORS.border}`, marginBottom: '16px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
                     <span style={{ fontSize: '12px', fontWeight: 'bold', color: COLORS.accentWorker }}>TU ANUNCIO ACTIVO</span>
-                    <span style={{ fontSize: '12px', fontWeight: 'bold', color: disponible ? COLORS.primary : COLORS.textSecondary }}>
+                    <span style={{ fontSize: '12px', fontWeight: 'bold', color: disponible ? COLORS.primary : COLORS.error }}>
                       {disponible ? 'Activo' : 'Inactivo'}
                     </span>
                   </div>
@@ -1275,9 +1345,24 @@ export default function App() {
                       onClick={() => abrirPerfilDetallado({ id: currentUserDocId, nombre, email, oficio, colonia, anosExperiencia, descripcion: descripcionServicio, rating: '5.0' })}
                       style={{ width: '100%', backgroundColor: 'transparent', color: COLORS.primary, border: `1px solid ${COLORS.border}`, padding: '10px', borderRadius: '12px', fontWeight: 'bold', fontSize: '12px', cursor: 'pointer' }}
                     >
-                      Vista previa como cliente
+                      Vista previa de mi perfil
                     </button>
                   </div>
+                </div>
+
+                {/* Soporte al cliente / trabajador en su perfil */}
+                <div style={{ backgroundColor: COLORS.card, borderRadius: '16px', padding: '16px', border: `1px solid ${COLORS.border}` }}>
+                  <h3 style={{ fontSize: '15px', fontWeight: 'bold', color: COLORS.textMain, margin: '0 0 6px 0' }}>Soporte y Asistencia</h3>
+                  <p style={{ fontSize: '12px', color: COLORS.textSecondary, margin: '0 0 12px 0' }}>
+                    ¿Tienes algún inconveniente con tu cuenta o solicitudes? Contáctanos directamente.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={abrirChatSoporte}
+                    style={{ width: '100%', backgroundColor: '#1E2D38', color: COLORS.primary, border: `1px solid ${COLORS.primary}`, padding: '12px', borderRadius: '12px', fontWeight: 'bold', fontSize: '13px', cursor: 'pointer' }}
+                  >
+                    Contactar Soporte TECCO
+                  </button>
                 </div>
               </>
             )}
@@ -1367,117 +1452,92 @@ export default function App() {
 
             {navTab === 'solicitudes' && (
               <div>
-                <h2 style={{ fontSize: '18px', fontWeight: 'bold', color: COLORS.accentWorker, margin: '0 0 14px 0' }}>Solicitudes de Servicio</h2>
+                <h2 style={{ fontSize: '20px', fontWeight: 'bold', color: COLORS.textMain, marginBottom: '14px' }}>Solicitudes de Servicio</h2>
                 {misSolicitudes.length === 0 ? (
-                  <div style={{ backgroundColor: COLORS.card, padding: '20px', borderRadius: '16px', border: `1px solid ${COLORS.border}`, textAlign: 'center' }}>
-                    <p style={{ color: COLORS.textSecondary, fontSize: '13px', margin: 0 }}>No tienes solicitudes de servicio por el momento.</p>
+                  <div style={{ backgroundColor: COLORS.card, borderRadius: '16px', padding: '24px', border: `1px solid ${COLORS.border}`, textAlign: 'center' }}>
+                    <p style={{ fontSize: '13px', color: COLORS.textSecondary, margin: 0 }}>Aún no tienes solicitudes recibidas.</p>
                   </div>
                 ) : (
-                  misSolicitudes.map((sol) => {
-                    const estadoActual = sol.estado || 'Pendiente';
-                    return (
-                      <div key={sol.id} style={{ backgroundColor: COLORS.card, borderRadius: '16px', padding: '16px', marginBottom: '12px', border: `1px solid ${COLORS.border}` }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px', gap: '8px' }}>
-                          <strong style={{ fontSize: '14px', color: COLORS.textMain }}>{sol.cliente_nombre || sol.cliente_email || 'Cliente'}</strong>
-                          <span style={{ fontSize: '11px', fontWeight: 'bold', color: estadoActual === 'Aceptada' ? COLORS.primary : estadoActual === 'Rechazada' ? COLORS.error : COLORS.accentWorker }}>
-                            {estadoActual}
-                          </span>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                    {misSolicitudes.map((sol) => {
+                      const estadoActual = sol.estado || 'Pendiente';
+                      const esPendiente = estadoActual === 'Pendiente';
+                      const esAceptada = estadoActual === 'Aceptada';
+                      return (
+                        <div key={sol.id} style={{ backgroundColor: COLORS.card, borderRadius: '16px', padding: '16px', border: `1px solid ${COLORS.border}` }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                            <span style={{ fontSize: '14px', fontWeight: 'bold', color: COLORS.textMain }}>
+                              Cliente: {sol.cliente_nombre || sol.cliente_email}
+                            </span>
+                            <span
+                              style={{
+                                fontSize: '11px',
+                                fontWeight: 'bold',
+                                padding: '3px 8px',
+                                borderRadius: '6px',
+                                backgroundColor: esAceptada ? 'rgba(0, 168, 135, 0.16)' : esPendiente ? 'rgba(245, 158, 11, 0.16)' : 'rgba(252, 129, 129, 0.15)',
+                                color: esAceptada ? COLORS.primary : esPendiente ? COLORS.accentWorker : COLORS.error
+                              }}
+                            >
+                              {estadoActual}
+                            </span>
+                          </div>
+
+                          <p style={{ fontSize: '12px', color: COLORS.textSecondary, margin: '0 0 6px 0' }}>
+                            Zona: <strong style={{ color: COLORS.textMain }}>{sol.zona}</strong> · Domicilio: {sol.direccion_exacta || 'Por confirmar'}
+                          </p>
+                          <p style={{ fontSize: '13px', color: '#CBD5E0', backgroundColor: COLORS.background, padding: '10px', borderRadius: '10px', margin: '0 0 12px 0' }}>
+                            "{sol.detalles_falla}"
+                          </p>
+
+                          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                            {esPendiente && (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => handleResponderSolicitudTrabajador(sol, 'Aceptada')}
+                                  style={{ flex: 1, backgroundColor: COLORS.primary, color: '#000000', border: 'none', padding: '10px 12px', borderRadius: '10px', fontWeight: 'bold', fontSize: '12px', cursor: 'pointer' }}
+                                >
+                                  Aceptar solicitud
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleResponderSolicitudTrabajador(sol, 'Rechazada')}
+                                  style={{ flex: 1, backgroundColor: '#2D1A1E', color: COLORS.error, border: '1px solid #742A2A', padding: '10px 12px', borderRadius: '10px', fontWeight: 'bold', fontSize: '12px', cursor: 'pointer' }}
+                                >
+                                  Rechazar
+                                </button>
+                              </>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const clienteMail = (sol.cliente_email || '').trim().toLowerCase();
+                                const salaId = `sala_${clienteMail}__${emailTrabajador}`;
+                                setChatSalaInfo({
+                                  salaId,
+                                  nombreContraparte: sol.cliente_nombre || 'Cliente',
+                                  emailContraparte: clienteMail
+                                });
+                                setChatActivo(true);
+                              }}
+                              style={{ width: '100%', backgroundColor: '#1E2D38', color: COLORS.textMain, border: `1px solid ${COLORS.border}`, padding: '10px', borderRadius: '10px', fontWeight: 'bold', fontSize: '12px', cursor: 'pointer' }}
+                            >
+                              Chatear con el cliente
+                            </button>
+                          </div>
                         </div>
-                        <p style={{ fontSize: '13px', color: '#CBD5E0', margin: '0 0 6px 0' }}>{sol.detalles_falla}</p>
-                        <p style={{ fontSize: '12px', color: COLORS.textSecondary, margin: '0 0 12px 0' }}>
-                          Zona: {sol.zona || 'Centro'} · Domicilio: {sol.direccion_exacta || 'No especificado'}
-                        </p>
-                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                          <button
-                            type="button"
-                            onClick={() => handleResponderSolicitudTrabajador(sol.id, 'Aceptada')}
-                            style={{ flex: 1, backgroundColor: COLORS.primary, color: '#000', border: 'none', padding: '10px', borderRadius: '10px', fontWeight: 'bold', fontSize: '12px', cursor: 'pointer' }}
-                          >
-                            Aceptar
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleResponderSolicitudTrabajador(sol.id, 'Rechazada')}
-                            style={{ flex: 1, backgroundColor: '#2D1A1E', color: COLORS.error, border: '1px solid #742A2A', padding: '10px', borderRadius: '10px', fontWeight: 'bold', fontSize: '12px', cursor: 'pointer' }}
-                          >
-                            No aceptar
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => abrirChatConEspecialista(null, { salaId: construirSalaId(miCorreoNormalizado, sol.cliente_email), contraparteEmail: sol.cliente_email, contraparteNombre: sol.cliente_nombre || sol.cliente_email })}
-                            style={{ backgroundColor: '#1E2D38', color: COLORS.textMain, border: `1px solid ${COLORS.border}`, padding: '10px 12px', borderRadius: '10px', fontWeight: 'bold', fontSize: '12px', cursor: 'pointer' }}
-                          >
-                            Chat
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })
+                      );
+                    })}
+                  </div>
                 )}
               </div>
             )}
 
             {navTab === 'mensajes' && (
               <div>
-                <h2 style={{ fontSize: '18px', fontWeight: 'bold', color: COLORS.accentWorker, margin: '0 0 14px 0' }}>Chats Guardados</h2>
-                {conversacionesGuardadas.length === 0 ? (
-                  <div style={{ backgroundColor: COLORS.card, padding: '20px', borderRadius: '16px', border: `1px solid ${COLORS.border}`, textAlign: 'center' }}>
-                    <p style={{ color: COLORS.textSecondary, fontSize: '13px', margin: 0 }}>Aún no tienes conversaciones guardadas con clientes.</p>
-                  </div>
-                ) : (
-                  conversacionesGuardadas.map((conv) => (
-                    <div
-                      key={conv.salaId}
-                      onClick={() => abrirChatConEspecialista(null, conv)}
-                      style={{ backgroundColor: COLORS.card, borderRadius: '14px', padding: '14px 16px', marginBottom: '10px', border: `1px solid ${COLORS.border}`, cursor: 'pointer' }}
-                    >
-                      <div style={{ fontSize: '14px', fontWeight: 'bold', color: COLORS.textMain }}>{conv.contraparteNombre}</div>
-                      <div style={{ fontSize: '12px', color: COLORS.textSecondary, marginTop: '4px' }}>{conv.ultimoTexto}</div>
-                    </div>
-                  ))
-                )}
-              </div>
-            )}
-
-            {navTab === 'cuenta' && (
-              <div>
-                <h2 style={{ fontSize: '20px', fontWeight: 'bold', color: COLORS.accentWorker, marginBottom: '16px' }}>Perfil y Soporte</h2>
-                <div style={{ backgroundColor: COLORS.card, borderRadius: '16px', padding: '18px', border: `1px solid ${COLORS.border}`, marginBottom: '16px' }}>
-                  <p style={{ fontSize: '15px', fontWeight: 'bold', color: COLORS.textMain, margin: '0 0 4px 0' }}>{nombre || 'Especialista TECCO'}</p>
-                  <p style={{ fontSize: '12px', color: COLORS.textSecondary, margin: '0 0 8px 0' }}>{email} · Estado: {disponible ? 'Activo' : 'Inactivo'}</p>
-                  <button 
-                    onClick={cerrarSesion}
-                    style={{ backgroundColor: '#2D1A1E', color: COLORS.error, border: '1px solid #742A2A', width: '100%', padding: '12px', borderRadius: '12px', fontWeight: 'bold', fontSize: '14px', cursor: 'pointer' }}
-                  >
-                    Cerrar sesión
-                  </button>
-                </div>
-
-                <div style={{ backgroundColor: COLORS.card, borderRadius: '16px', padding: '18px', border: `1px solid ${COLORS.border}` }}>
-                  <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: COLORS.textMain, margin: '0 0 12px 0' }}>Soporte y preguntas frecuentes</h3>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                    {FAQ_ITEMS.map((item, idx) => {
-                      const abierta = faqAbierta === idx;
-                      return (
-                        <div
-                          key={idx}
-                          onClick={() => setFaqAbierta(abierta ? null : idx)}
-                          style={{ backgroundColor: COLORS.background, borderRadius: '10px', padding: '12px', border: `1px solid ${COLORS.border}`, cursor: 'pointer' }}
-                        >
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
-                            <span style={{ fontSize: '13px', fontWeight: 'bold', color: COLORS.textMain }}>{item.pregunta}</span>
-                            <span style={{ fontSize: '12px', color: COLORS.accentWorker, fontWeight: 'bold' }}>{abierta ? '−' : '+'}</span>
-                          </div>
-                          {abierta && (
-                            <p style={{ fontSize: '12px', color: COLORS.textSecondary, margin: '8px 0 0 0', lineHeight: '1.45' }}>
-                              {item.respuesta}
-                            </p>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
+                <h2 style={{ fontSize: '20px', fontWeight: 'bold', color: COLORS.textMain, marginBottom: '14px' }}>Mis Conversaciones</h2>
+                {renderListaChatsGuardados(true)}
               </div>
             )}
 
@@ -1516,7 +1576,8 @@ export default function App() {
               </div>
               <h2 style={{ fontSize: '22px', fontWeight: 'bold', color: COLORS.textMain, margin: '0 0 12px 0' }}>¿Qué necesitas arreglar?</h2>
 
-              <div style={{ marginBottom: '12px' }}>
+              {/* Búsqueda directa */}
+              <div style={{ marginBottom: '12px', position: 'relative' }}>
                 <input
                   type="text"
                   placeholder="Buscar especialista por nombre, oficio o colonia..."
@@ -1534,6 +1595,7 @@ export default function App() {
                 />
               </div>
 
+              {/* Barra de filtro */}
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', marginBottom: '18px', flexWrap: 'wrap' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <button
@@ -1590,6 +1652,7 @@ export default function App() {
                 </button>
               </div>
 
+              {/* MODAL CENTRADO ESTILO MERCADO LIBRE */}
               {modalFiltroAbierto && (
                 <div
                   onClick={() => setModalFiltroAbierto(false)}
@@ -1725,6 +1788,7 @@ export default function App() {
                 </div>
               )}
 
+              {/* Lista de especialistas */}
               <div>
                 {cargandoDatos ? (
                   <p style={{ textAlign: 'center', color: COLORS.textSecondary, padding: '30px' }}>Cargando especialistas...</p>
@@ -1733,6 +1797,7 @@ export default function App() {
                 ) : (
                   trabajadoresFiltrados.map((item) => {
                     const stats = obtenerEstadisticasResenas(item);
+                    const estaActivo = item.disponible !== false;
                     return (
                       <div 
                         key={item.id} 
@@ -1748,6 +1813,9 @@ export default function App() {
                               <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: COLORS.textMain, margin: 0 }}>{item.nombre}</h3>
                               <span style={{ fontSize: '11px', fontWeight: 'bold', backgroundColor: 'rgba(0, 168, 135, 0.14)', color: COLORS.primary, padding: '2px 8px', borderRadius: '6px' }}>
                                 {item.oficio || 'Especialista'}
+                              </span>
+                              <span style={{ fontSize: '10px', fontWeight: 'bold', color: estaActivo ? COLORS.primary : COLORS.textSecondary }}>
+                                · {estaActivo ? 'Activo' : 'Inactivo'}
                               </span>
                             </div>
 
@@ -1777,45 +1845,18 @@ export default function App() {
 
           {navTab === 'mensajes' && (
             <div>
-              <h2 style={{ fontSize: '20px', fontWeight: 'bold', color: COLORS.textMain, marginBottom: '16px' }}>Chats Guardados</h2>
-              {!isAuthenticated ? (
-                <div style={{ backgroundColor: COLORS.card, padding: '20px', borderRadius: '16px', border: `1px solid ${COLORS.border}`, textAlign: 'center' }}>
-                  <p style={{ color: COLORS.textSecondary, fontSize: '13px', marginBottom: '12px' }}>Inicia sesión para ver tus chats guardados.</p>
-                  <button 
-                    onClick={() => navigation.navigate('Auth', { role: 'cliente', initialMode: 'login' })}
-                    style={{ backgroundColor: COLORS.primary, color: '#000', border: 'none', padding: '12px 20px', borderRadius: '10px', fontWeight: 'bold', cursor: 'pointer' }}
-                  >
-                    Iniciar sesión
-                  </button>
-                </div>
-              ) : conversacionesGuardadas.length === 0 ? (
-                <div style={{ backgroundColor: COLORS.card, padding: '20px', borderRadius: '16px', border: `1px solid ${COLORS.border}`, textAlign: 'center' }}>
-                  <p style={{ color: COLORS.textSecondary, fontSize: '13px', margin: 0 }}>
-                    Aún no tienes chats guardados. Entra al perfil de un especialista y presiona "Chat".
-                  </p>
-                </div>
-              ) : (
-                conversacionesGuardadas.map((conv) => (
-                  <div
-                    key={conv.salaId}
-                    onClick={() => abrirChatConEspecialista(null, conv)}
-                    style={{ backgroundColor: COLORS.card, borderRadius: '14px', padding: '14px 16px', marginBottom: '10px', border: `1px solid ${COLORS.border}`, cursor: 'pointer' }}
-                  >
-                    <div style={{ fontSize: '14px', fontWeight: 'bold', color: COLORS.textMain }}>{conv.contraparteNombre}</div>
-                    <div style={{ fontSize: '12px', color: COLORS.textSecondary, marginTop: '4px' }}>{conv.ultimoTexto}</div>
-                  </div>
-                ))
-              )}
+              <h2 style={{ fontSize: '20px', fontWeight: 'bold', color: COLORS.textMain, marginBottom: '16px' }}>Mensajes</h2>
+              {renderListaChatsGuardados(false)}
             </div>
           )}
 
           {navTab === 'cuenta' && (
             <div>
-              <h2 style={{ fontSize: '22px', fontWeight: 'bold', color: COLORS.textMain, marginBottom: '16px' }}>Mi cuenta</h2>
+              <h2 style={{ fontSize: '22px', fontWeight: 'bold', color: COLORS.textMain, marginBottom: '16px' }}>Mi Perfil</h2>
               
               {!isAuthenticated ? (
                 <div style={{ backgroundColor: COLORS.card, borderRadius: '16px', padding: '20px', border: `1px solid ${COLORS.border}`, marginBottom: '16px' }}>
-                  <p style={{ fontSize: '13px', color: COLORS.textSecondary, margin: '0 0 14px 0' }}>Inicia sesión para contratar.</p>
+                  <p style={{ fontSize: '13px', color: COLORS.textSecondary, margin: '0 0 14px 0' }}>Inicia sesión para contratar y gestionar tus servicios.</p>
                   <button 
                     onClick={() => navigation.navigate('Auth', { role: 'cliente', initialMode: 'login' })}
                     style={{ backgroundColor: COLORS.primary, color: '#000000', border: 'none', width: '100%', padding: '14px', borderRadius: '12px', fontWeight: 'bold', fontSize: '15px', cursor: 'pointer' }}
@@ -1837,6 +1878,21 @@ export default function App() {
                 </div>
               )}
 
+              {/* Soporte al cliente ubicado en Perfil */}
+              <div style={{ backgroundColor: COLORS.card, borderRadius: '16px', padding: '18px', border: `1px solid ${COLORS.border}`, marginBottom: '16px' }}>
+                <h3 style={{ fontSize: '15px', fontWeight: 'bold', color: COLORS.textMain, margin: '0 0 6px 0' }}>Soporte al Cliente</h3>
+                <p style={{ fontSize: '12px', color: COLORS.textSecondary, margin: '0 0 12px 0' }}>
+                  ¿Necesitas ayuda con algún servicio o solicitud? Comunícate con nuestro equipo.
+                </p>
+                <button
+                  type="button"
+                  onClick={abrirChatSoporte}
+                  style={{ width: '100%', backgroundColor: '#1E2D38', color: COLORS.primary, border: `1px solid ${COLORS.primary}`, padding: '12px', borderRadius: '12px', fontWeight: 'bold', fontSize: '13px', cursor: 'pointer' }}
+                >
+                  Chat con Soporte TECCO
+                </button>
+              </div>
+
               <div style={{ backgroundColor: COLORS.card, borderRadius: '16px', padding: '6px', border: `1px solid ${COLORS.border}`, marginBottom: '16px' }}>
                 <button 
                   onClick={() => navigation.navigate('RoleSelection')}
@@ -1846,8 +1902,9 @@ export default function App() {
                 </button>
               </div>
 
+              {/* Ayuda y preguntas frecuentes */}
               <div style={{ backgroundColor: COLORS.card, borderRadius: '16px', padding: '18px', border: `1px solid ${COLORS.border}` }}>
-                <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: COLORS.textMain, margin: '0 0 12px 0' }}>Soporte y preguntas frecuentes</h3>
+                <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: COLORS.textMain, margin: '0 0 12px 0' }}>Ayuda y preguntas frecuentes</h3>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                   {FAQ_ITEMS.map((item, idx) => {
                     const abierta = faqAbierta === idx;
@@ -1911,6 +1968,10 @@ export default function App() {
     );
   }
   if (pantalla === 'RateService') {
+    if (esMismoUsuarioQueTrabajador(perfilSeleccionado)) {
+      setPantalla('DetallePerfil');
+      return null;
+    }
     return (
       <RateService 
         workerId={perfilSeleccionado?.id} 
@@ -1922,6 +1983,11 @@ export default function App() {
 
   if (pantalla === 'RequestService' || pantalla === 'SolicitarTrabajo') {
     const targetWorker = route.params.worker || perfilSeleccionado;
+    if (esMismoUsuarioQueTrabajador(targetWorker)) {
+      setPantalla('Home');
+      return null;
+    }
+
     return (
       <div style={{ backgroundColor: COLORS.background, minHeight: '100vh', width: '100%', padding: '16px', fontFamily: 'Inter, sans-serif', color: COLORS.textMain, overflowY: 'auto' }}>
         {renderToast()}
@@ -1993,7 +2059,7 @@ export default function App() {
 
   if (pantalla === 'DetallePerfil' && perfilSeleccionado) {
     const statsPerfil = obtenerEstadisticasResenas(perfilSeleccionado);
-    const esPropioPerfil = esMismoTrabajador(perfilSeleccionado);
+    const bloquearAutoAcciones = esMismoUsuarioQueTrabajador(perfilSeleccionado);
 
     return (
       <div style={{ backgroundColor: COLORS.background, minHeight: '100vh', width: '100%', paddingBottom: '40px', fontFamily: 'Inter, sans-serif', color: COLORS.textMain, overflowY: 'auto' }}>
@@ -2015,19 +2081,23 @@ export default function App() {
               "{obtenerDetallePorOficio(perfilSeleccionado)}"
             </p>
 
-            {esPropioPerfil ? (
-              <p style={{ fontSize: '12px', color: COLORS.textSecondary, textAlign: 'center', margin: 0 }}>
-                Este es tu perfil profesional. No puedes solicitarte un servicio ni calificarte a ti mismo.
-              </p>
-            ) : (
+            {/* En modo trabajador o perfil propio se ocultan las acciones de solicitarse o calificarse */}
+            {!bloquearAutoAcciones ? (
               <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
                 <button onClick={() => irASolicitarServicio(perfilSeleccionado)} style={{ flex: 1, minWidth: '140px', backgroundColor: COLORS.primary, color: '#000000', border: 'none', padding: '14px', borderRadius: '12px', fontSize: '14px', fontWeight: 'bold', cursor: 'pointer' }}>Solicitar Servicio</button>
                 <button onClick={() => abrirChatConEspecialista(perfilSeleccionado)} style={{ flex: 1, minWidth: '100px', backgroundColor: '#222D37', color: COLORS.textMain, border: 'none', padding: '14px', borderRadius: '12px', fontSize: '14px', fontWeight: 'bold', cursor: 'pointer' }}>Chat</button>
                 <button onClick={() => setPantalla('RateService')} style={{ width: '100%', backgroundColor: 'transparent', color: '#E2B714', border: `1px solid ${COLORS.border}`, padding: '11px', borderRadius: '12px', fontSize: '13px', fontWeight: 'bold', cursor: 'pointer' }}>Calificar servicio</button>
               </div>
+            ) : (
+              <div style={{ backgroundColor: COLORS.background, borderRadius: '12px', padding: '10px 12px', textAlign: 'center', border: `1px solid ${COLORS.border}` }}>
+                <span style={{ fontSize: '12px', color: COLORS.textSecondary }}>
+                  Vista previa de tu perfil profesional (no puedes auto-solicitarte ni auto-calificarte).
+                </span>
+              </div>
             )}
           </div>
 
+          {/* Galería de trabajos previos */}
           <div style={{ padding: '0 16px', marginBottom: '22px' }}>
             <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: COLORS.textMain, marginBottom: '12px' }}>Galería de Trabajos Previos</h3>
             
@@ -2051,6 +2121,7 @@ export default function App() {
             )}
           </div>
 
+          {/* Reseñas verificadas visibles en el perfil */}
           <div style={{ padding: '0 16px' }}>
             <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: COLORS.textMain, marginBottom: '12px' }}>
               Reseñas de clientes ({statsPerfil.total})

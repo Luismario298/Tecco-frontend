@@ -1,17 +1,25 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { db } from './firebase';
-import { collection, addDoc, query, where, onSnapshot, serverTimestamp } from 'firebase/firestore';
+import {
+  collection,
+  addDoc,
+  query,
+  where,
+  onSnapshot,
+  serverTimestamp,
+  doc,
+  setDoc
+} from 'firebase/firestore';
 
 const COLORS = {
   primary: '#00A887',
-  bubbleMine: '#005C4B',
-  bubbleOther: '#1F2C34',
-  headerBg: '#16222D',
-  chatBg: '#0B131A',
-  inputBg: '#1E2A38',
+  background: '#0B131A',
+  card: '#16222D',
   textMain: '#FFFFFF',
   textSecondary: '#8696A0',
-  border: '#222D37'
+  border: '#222D37',
+  bubbleOwn: '#005C4B',
+  bubbleOther: '#1F2C34'
 };
 
 export default function RealtimeChat({
@@ -20,23 +28,23 @@ export default function RealtimeChat({
   currentUserRole,
   currentUserName,
   contraparteNombre,
+  contraparteEmail,
   onClose
 }) {
   const [mensajes, setMensajes] = useState([]);
   const [nuevoMensaje, setNuevoMensaje] = useState('');
   const [enviando, setEnviando] = useState(false);
-  const [cargando, setCargando] = useState(true);
-  const mensajesEndRef = useRef(null);
+  const bottomRef = useRef(null);
 
-  const salaActiva = salaId || 'sala_general_tecco';
-  const miIdentificador = (currentUserEmail || currentUserName || 'usuario_tecco').trim().toLowerCase();
+  const emailPropio = (currentUserEmail || '').trim().toLowerCase();
+  const emailOtro = (contraparteEmail || '').trim().toLowerCase();
 
-  // Escucha en tiempo real de los mensajes de esta sala en Firebase Firestore
   useEffect(() => {
-    setCargando(true);
+    if (!salaId) return;
+
     const q = query(
       collection(db, 'chats_mensajes'),
-      where('salaId', '==', salaActiva)
+      where('salaId', '==', salaId)
     );
 
     const unsubscribe = onSnapshot(
@@ -47,101 +55,101 @@ export default function RealtimeChat({
           ...docItem.data()
         }));
 
-        // Ordenar cronológicamente en cliente para evitar problemas de índices compuestos
         lista.sort((a, b) => {
-          const tiempoA = a.createdAtMs || (a.timestamp?.toMillis ? a.timestamp.toMillis() : 0);
-          const tiempoB = b.createdAtMs || (b.timestamp?.toMillis ? b.timestamp.toMillis() : 0);
-          return tiempoA - tiempoB;
+          const tA = a.timestampMs || (a.createdAt?.toMillis ? a.createdAt.toMillis() : 0);
+          const tB = b.timestampMs || (b.createdAt?.toMillis ? b.createdAt.toMillis() : 0);
+          return tA - tB;
         });
 
         setMensajes(lista);
-        setCargando(false);
       },
       (error) => {
-        console.error('Error escuchando mensajes en tiempo real:', error);
-        setCargando(false);
+        console.error('Error escuchando mensajes del chat:', error);
       }
     );
 
     return () => unsubscribe();
-  }, [salaActiva]);
+  }, [salaId]);
 
-  // Desplazamiento automático hacia el último mensaje
   useEffect(() => {
-    if (mensajesEndRef.current) {
-      mensajesEndRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [mensajes]);
 
   const handleEnviarMensaje = async (e) => {
     e.preventDefault();
     const textoLimpio = nuevoMensaje.trim();
-    if (!textoLimpio || enviando) return;
+    if (!textoLimpio || !salaId || enviando) return;
 
     setEnviando(true);
     setNuevoMensaje('');
+    const ahoraMs = Date.now();
 
     try {
       await addDoc(collection(db, 'chats_mensajes'), {
-        salaId: salaActiva,
+        salaId,
         texto: textoLimpio,
-        remitenteEmail: miIdentificador,
-        remitenteNombre: currentUserName || 'Usuario',
+        remitenteEmail: emailPropio,
+        remitenteNombre: currentUserName || 'Usuario TECCO',
         remitenteRol: currentUserRole || 'cliente',
-        createdAtMs: Date.now(),
-        timestamp: serverTimestamp()
+        destinatarioEmail: emailOtro,
+        destinatarioNombre: contraparteNombre || 'Contacto TECCO',
+        timestampMs: ahoraMs,
+        createdAt: serverTimestamp()
       });
+
+      const esTrabajador = currentUserRole === 'trabajador';
+      const clienteEmail = esTrabajador ? emailOtro : emailPropio;
+      const clienteNombre = esTrabajador ? (contraparteNombre || 'Cliente') : (currentUserName || 'Cliente');
+      const trabajadorEmail = esTrabajador ? emailPropio : emailOtro;
+      const trabajadorNombre = esTrabajador ? (currentUserName || 'Especialista') : (contraparteNombre || 'Especialista');
+
+      await setDoc(
+        doc(db, 'chats_salas', salaId),
+        {
+          salaId,
+          clienteEmail,
+          clienteNombre,
+          trabajadorEmail,
+          trabajadorNombre,
+          participantes: [clienteEmail, trabajadorEmail].filter(Boolean),
+          ultimoMensaje: textoLimpio,
+          actualizadoEnMs: ahoraMs,
+          actualizadoEn: serverTimestamp()
+        },
+        { merge: true }
+      );
     } catch (error) {
       console.error('Error al enviar mensaje:', error);
       setNuevoMensaje(textoLimpio);
-      alert('No se pudo enviar el mensaje. Intenta de nuevo.');
     } finally {
       setEnviando(false);
-    }
-  };
-
-  const formatearHora = (msg) => {
-    try {
-      const dateObj = msg.timestamp?.toDate
-        ? msg.timestamp.toDate()
-        : msg.createdAtMs
-        ? new Date(msg.createdAtMs)
-        : new Date();
-      return dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    } catch {
-      return '';
     }
   };
 
   return (
     <div
       style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        backgroundColor: COLORS.chatBg,
-        zIndex: 3000,
+        backgroundColor: COLORS.background,
+        minHeight: '100vh',
+        width: '100%',
         display: 'flex',
         flexDirection: 'column',
         fontFamily: 'Inter, sans-serif',
         color: COLORS.textMain
       }}
     >
-      {/* Cabecera estilo WhatsApp */}
+      {/* Cabecera */}
       <div
         style={{
-          backgroundColor: COLORS.headerBg,
-          padding: '12px 16px',
+          backgroundColor: COLORS.card,
+          padding: '14px 16px',
           borderBottom: `1px solid ${COLORS.border}`,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          maxWidth: '680px',
-          width: '100%',
-          margin: '0 auto',
-          boxSizing: 'border-box'
+          position: 'sticky',
+          top: 0,
+          zIndex: 100
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -160,163 +168,116 @@ export default function RealtimeChat({
           >
             ←
           </button>
-
-          <div
-            style={{
-              width: '38px',
-              height: '38px',
-              borderRadius: '50%',
-              backgroundColor: '#1E2D38',
-              color: COLORS.primary,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              fontWeight: 'bold',
-              fontSize: '15px'
-            }}
-          >
-            {(contraparteNombre || 'E').charAt(0).toUpperCase()}
-          </div>
-
           <div>
             <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 'bold', color: COLORS.textMain }}>
-              {contraparteNombre || 'Especialista TECCO'}
+              {contraparteNombre || 'Conversación'}
             </h3>
-            <p style={{ margin: 0, fontSize: '11px', color: COLORS.primary }}>
-              En línea · Chat en tiempo real
-            </p>
+            <span style={{ fontSize: '11px', color: COLORS.primary }}>Chat en tiempo real</span>
           </div>
         </div>
       </div>
 
-      {/* Área de mensajes con desplazamiento táctil y con flechas */}
+      {/* Lista de mensajes */}
       <div
         style={{
           flex: 1,
-          overflowY: 'auto',
           padding: '16px',
+          overflowY: 'auto',
           display: 'flex',
           flexDirection: 'column',
-          gap: '8px',
-          maxWidth: '680px',
+          gap: '10px',
+          maxWidth: '640px',
           width: '100%',
-          margin: '0 auto',
-          boxSizing: 'border-box',
-          touchAction: 'pan-y'
+          margin: '0 auto'
         }}
       >
-        {cargando ? (
-          <p style={{ textAlign: 'center', color: COLORS.textSecondary, fontSize: '13px', marginTop: '20px' }}>
-            Conectando conversación...
+        {mensajes.length === 0 ? (
+          <p style={{ textAlign: 'center', color: COLORS.textSecondary, fontSize: '13px', marginTop: '30px' }}>
+            Inicia la conversación enviando un mensaje.
           </p>
-        ) : mensajes.length === 0 ? (
-          <div
-            style={{
-              alignSelf: 'center',
-              backgroundColor: COLORS.headerBg,
-              padding: '10px 16px',
-              borderRadius: '10px',
-              border: `1px solid ${COLORS.border}`,
-              marginTop: '12px',
-              textAlign: 'center'
-            }}
-          >
-            <p style={{ margin: 0, fontSize: '12px', color: COLORS.textSecondary }}>
-              Inicia la conversación con {contraparteNombre || 'el especialista'} para coordinar el servicio.
-            </p>
-          </div>
         ) : (
           mensajes.map((msg) => {
-            const esMio =
-              msg.remitenteEmail === miIdentificador ||
-              (msg.remitenteRol === currentUserRole && msg.remitenteNombre === currentUserName);
-
+            const esMio = (msg.remitenteEmail || '').toLowerCase() === emailPropio;
+            const hora = msg.timestampMs
+              ? new Date(msg.timestampMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+              : '';
             return (
               <div
                 key={msg.id}
                 style={{
                   alignSelf: esMio ? 'flex-end' : 'flex-start',
+                  backgroundColor: esMio ? COLORS.bubbleOwn : COLORS.bubbleOther,
+                  color: COLORS.textMain,
+                  padding: '10px 14px',
+                  borderRadius: '14px',
                   maxWidth: '78%',
-                  backgroundColor: esMio ? COLORS.bubbleMine : COLORS.bubbleOther,
-                  padding: '9px 12px',
-                  borderRadius: esMio ? '14px 14px 2px 14px' : '14px 14px 14px 2px',
-                  boxShadow: '0 1px 2px rgba(0, 0, 0, 0.35)',
-                  wordBreak: 'break-word'
+                  border: `1px solid ${COLORS.border}`
                 }}
               >
                 {!esMio && (
-                  <div style={{ fontSize: '11px', fontWeight: 'bold', color: COLORS.primary, marginBottom: '2px' }}>
+                  <div style={{ fontSize: '11px', fontWeight: 'bold', color: COLORS.primary, marginBottom: '3px' }}>
                     {msg.remitenteNombre || contraparteNombre}
                   </div>
                 )}
-                <div style={{ fontSize: '14px', lineHeight: '1.4', color: COLORS.textMain }}>
-                  {msg.texto}
-                </div>
-                <div
-                  style={{
-                    fontSize: '10px',
-                    color: 'rgba(255, 255, 255, 0.65)',
-                    textAlign: 'right',
-                    marginTop: '4px'
-                  }}
-                >
-                  {formatearHora(msg)}
-                </div>
+                <div style={{ fontSize: '13px', lineHeight: '1.4', wordBreak: 'break-word' }}>{msg.texto}</div>
+                {hora && (
+                  <div style={{ fontSize: '10px', color: COLORS.textSecondary, textAlign: 'right', marginTop: '4px' }}>
+                    {hora}
+                  </div>
+                )}
               </div>
             );
           })
         )}
-        <div ref={mensajesEndRef} />
+        <div ref={bottomRef} />
       </div>
 
-      {/* Barra inferior para escribir y enviar */}
+      {/* Barra de envío */}
       <form
         onSubmit={handleEnviarMensaje}
         style={{
-          backgroundColor: COLORS.headerBg,
-          padding: '10px 14px',
+          backgroundColor: COLORS.card,
+          padding: '12px 16px',
           borderTop: `1px solid ${COLORS.border}`,
           display: 'flex',
-          alignItems: 'center',
           gap: '10px',
-          maxWidth: '680px',
-          width: '100%',
-          margin: '0 auto',
-          boxSizing: 'border-box'
+          position: 'sticky',
+          bottom: 0
         }}
       >
-        <input
-          type="text"
-          placeholder="Escribe un mensaje..."
-          value={nuevoMensaje}
-          onChange={(e) => setNuevoMensaje(e.target.value)}
-          style={{
-            flex: 1,
-            padding: '12px 16px',
-            borderRadius: '24px',
-            border: `1px solid ${COLORS.border}`,
-            backgroundColor: COLORS.inputBg,
-            color: COLORS.textMain,
-            fontSize: '14px',
-            outline: 'none'
-          }}
-        />
-        <button
-          type="submit"
-          disabled={!nuevoMensaje.trim() || enviando}
-          style={{
-            backgroundColor: nuevoMensaje.trim() ? COLORS.primary : '#222D37',
-            color: nuevoMensaje.trim() ? '#000000' : COLORS.textSecondary,
-            border: 'none',
-            padding: '12px 18px',
-            borderRadius: '24px',
-            fontWeight: 'bold',
-            fontSize: '13px',
-            cursor: nuevoMensaje.trim() ? 'pointer' : 'default'
-          }}
-        >
-          Enviar
-        </button>
+        <div style={{ maxWidth: '640px', width: '100%', margin: '0 auto', display: 'flex', gap: '10px' }}>
+          <input
+            type="text"
+            placeholder="Escribe un mensaje..."
+            value={nuevoMensaje}
+            onChange={(e) => setNuevoMensaje(e.target.value)}
+            style={{
+              flex: 1,
+              padding: '12px 14px',
+              borderRadius: '12px',
+              border: `1px solid ${COLORS.border}`,
+              backgroundColor: COLORS.background,
+              color: COLORS.textMain,
+              fontSize: '13px'
+            }}
+          />
+          <button
+            type="submit"
+            disabled={enviando || !nuevoMensaje.trim()}
+            style={{
+              backgroundColor: COLORS.primary,
+              color: '#000000',
+              border: 'none',
+              padding: '12px 18px',
+              borderRadius: '12px',
+              fontWeight: 'bold',
+              fontSize: '13px',
+              cursor: 'pointer'
+            }}
+          >
+            Enviar
+          </button>
+        </div>
       </form>
     </div>
   );
