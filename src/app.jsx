@@ -164,6 +164,16 @@ export default function App() {
         scroll-behavior: smooth;
         touch-action: pan-y pan-x;
       }
+      [data-netlify-deploy-id],
+      #netlify-identity-widget,
+      iframe[src*="netlify"],
+      a[href*="netlify.com"][style*="position: fixed"],
+      div[style*="z-index: 2147483647"] {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+        pointer-events: none !important;
+      }
     `;
     document.head.appendChild(styleEl);
 
@@ -1155,9 +1165,6 @@ export default function App() {
     );
   };
 
-  // =========================================================================
-  // CHAT EN TIEMPO REAL
-  // =========================================================================
   if (chatActivo) {
     return (
       <RealtimeChat
@@ -1175,9 +1182,6 @@ export default function App() {
     );
   }
 
-  // =========================================================================
-  // MAPA MOSTRADO DESPUÉS DE SOLICITAR UN SERVICIO
-  // =========================================================================
   if (pantalla === 'MapaSolicitud') {
     const trabajadoresMapa = perfilSeleccionado ? [perfilSeleccionado] : trabajadores;
 
@@ -1240,13 +1244,9 @@ export default function App() {
     );
   }
 
-  // =========================================================================
-  // PANTALLA PRINCIPAL (HOME)
-  // =========================================================================
   if (pantalla === 'Home') {
     const esColaborador = route.params.role === 'trabajador' && isAuthenticated;
 
-    // 1. VISTA EXCLUSIVA PARA COLABORADOR
     if (esColaborador) {
       const emailTrabajador = (email || '').trim().toLowerCase();
       const misSolicitudes = solicitudes.filter(
@@ -1350,7 +1350,6 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Soporte al cliente / trabajador en su perfil */}
                 <div style={{ backgroundColor: COLORS.card, borderRadius: '16px', padding: '16px', border: `1px solid ${COLORS.border}` }}>
                   <h3 style={{ fontSize: '15px', fontWeight: 'bold', color: COLORS.textMain, margin: '0 0 6px 0' }}>Soporte y Asistencia</h3>
                   <p style={{ fontSize: '12px', color: COLORS.textSecondary, margin: '0 0 12px 0' }}>
@@ -1547,7 +1546,6 @@ export default function App() {
       );
     }
 
-    // 2. VISTA PARA CLIENTE
     const trabajadoresFiltrados = trabajadores.filter((t) => {
       const coincideOficio =
         filtroOficio === 'Todos' || t.oficio?.toLowerCase() === filtroOficio.toLowerCase();
@@ -1576,7 +1574,6 @@ export default function App() {
               </div>
               <h2 style={{ fontSize: '22px', fontWeight: 'bold', color: COLORS.textMain, margin: '0 0 12px 0' }}>¿Qué necesitas arreglar?</h2>
 
-              {/* Búsqueda directa */}
               <div style={{ marginBottom: '12px', position: 'relative' }}>
                 <input
                   type="text"
@@ -1595,7 +1592,6 @@ export default function App() {
                 />
               </div>
 
-              {/* Barra de filtro */}
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', marginBottom: '18px', flexWrap: 'wrap' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <button
@@ -1652,7 +1648,6 @@ export default function App() {
                 </button>
               </div>
 
-              {/* MODAL CENTRADO ESTILO MERCADO LIBRE */}
               {modalFiltroAbierto && (
                 <div
                   onClick={() => setModalFiltroAbierto(false)}
@@ -1788,7 +1783,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* Lista de especialistas */}
               <div>
                 {cargandoDatos ? (
                   <p style={{ textAlign: 'center', color: COLORS.textSecondary, padding: '30px' }}>Cargando especialistas...</p>
@@ -1878,7 +1872,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* Soporte al cliente ubicado en Perfil */}
               <div style={{ backgroundColor: COLORS.card, borderRadius: '16px', padding: '18px', border: `1px solid ${COLORS.border}`, marginBottom: '16px' }}>
                 <h3 style={{ fontSize: '15px', fontWeight: 'bold', color: COLORS.textMain, margin: '0 0 6px 0' }}>Soporte al Cliente</h3>
                 <p style={{ fontSize: '12px', color: COLORS.textSecondary, margin: '0 0 12px 0' }}>
@@ -1902,7 +1895,6 @@ export default function App() {
                 </button>
               </div>
 
-              {/* Ayuda y preguntas frecuentes */}
               <div style={{ backgroundColor: COLORS.card, borderRadius: '16px', padding: '18px', border: `1px solid ${COLORS.border}` }}>
                 <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: COLORS.textMain, margin: '0 0 12px 0' }}>Ayuda y preguntas frecuentes</h3>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
@@ -1944,9 +1936,6 @@ export default function App() {
     );
   }
 
-  // =========================================================================
-  // RESTO DE PANTALLAS
-  // =========================================================================
   if (pantalla === 'Map') return <MapScreen navigation={navigation} />;
   if (pantalla === 'FullMap') return <FullMapScreen route={route} navigation={navigation} embedded={false} />;
   if (pantalla === 'WorkerProfile') {
@@ -2081,7 +2070,6 @@ export default function App() {
               "{obtenerDetallePorOficio(perfilSeleccionado)}"
             </p>
 
-            {/* En modo trabajador o perfil propio se ocultan las acciones de solicitarse o calificarse */}
             {!bloquearAutoAcciones ? (
               <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
                 <button onClick={() => irASolicitarServicio(perfilSeleccionado)} style={{ flex: 1, minWidth: '140px', backgroundColor: COLORS.primary, color: '#000000', border: 'none', padding: '14px', borderRadius: '12px', fontSize: '14px', fontWeight: 'bold', cursor: 'pointer' }}>Solicitar Servicio</button>
@@ -2097,7 +2085,6 @@ export default function App() {
             )}
           </div>
 
-          {/* Galería de trabajos previos */}
           <div style={{ padding: '0 16px', marginBottom: '22px' }}>
             <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: COLORS.textMain, marginBottom: '12px' }}>Galería de Trabajos Previos</h3>
             
@@ -2121,7 +2108,6 @@ export default function App() {
             )}
           </div>
 
-          {/* Reseñas verificadas visibles en el perfil */}
           <div style={{ padding: '0 16px' }}>
             <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: COLORS.textMain, marginBottom: '12px' }}>
               Reseñas de clientes ({statsPerfil.total})
