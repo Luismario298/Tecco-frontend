@@ -164,18 +164,48 @@ export default function App() {
         scroll-behavior: smooth;
         touch-action: pan-y pan-x;
       }
+      iframe[data-nl-ready],
+      iframe[style*="2147483647"],
+      iframe[style*="z-index: 2147483647"],
       [data-netlify-deploy-id],
       #netlify-identity-widget,
-      iframe[src*="netlify"],
-      a[href*="netlify.com"][style*="position: fixed"],
-      div[style*="z-index: 2147483647"] {
+      .nl-wrap,
+      .nl-badge,
+      #nl-card {
         display: none !important;
         visibility: hidden !important;
         opacity: 0 !important;
         pointer-events: none !important;
+        width: 0 !important;
+        height: 0 !important;
       }
     `;
     document.head.appendChild(styleEl);
+
+    const ocultarWidgetNetlify = () => {
+      document.querySelectorAll('iframe').forEach((frame) => {
+        const zIndex = window.getComputedStyle(frame).zIndex;
+        const tieneAtributoNl = frame.hasAttribute('data-nl-ready') || (frame.id || '').includes('nl-badge');
+        let tieneContenidoNl = false;
+        try {
+          const docInterno = frame.contentDocument || frame.contentWindow?.document;
+          if (docInterno && docInterno.querySelector('.nl-badge, .nl-wrap, #nl-card')) {
+            tieneContenidoNl = true;
+          }
+        } catch (e) {}
+
+        if (tieneAtributoNl || tieneContenidoNl || zIndex === '2147483647') {
+          frame.style.setProperty('display', 'none', 'important');
+          frame.style.setProperty('visibility', 'hidden', 'important');
+          frame.style.setProperty('pointer-events', 'none', 'important');
+          frame.remove();
+        }
+      });
+    };
+
+    ocultarWidgetNetlify();
+    const observer = new MutationObserver(ocultarWidgetNetlify);
+    observer.observe(document.body, { childList: true, subtree: true });
 
     const handleKeyDown = (e) => {
       if (e.key === 'Escape' && modalFiltroAbierto) {
@@ -199,7 +229,10 @@ export default function App() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => {
-      document.head.removeChild(styleEl);
+      observer.disconnect();
+      if (styleEl.parentNode) {
+        styleEl.parentNode.removeChild(styleEl);
+      }
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [modalFiltroAbierto]);
